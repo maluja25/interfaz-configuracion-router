@@ -69,27 +69,27 @@ class RouterAnalyzer:
         
         for i, command in enumerate(detection_commands, 1):
             print(f"   [{i}/{len(detection_commands)}] Probando comando: {command}")
-            time.sleep(1.5)  # Tiempo de ejecución del comando
+            #time.sleep(1.5)  # Tiempo de ejecución del comando
             
             try:
                 output = self.execute_command(command)
-                time.sleep(0.5)  # Tiempo de procesamiento de respuesta
+                #time.sleep(0.5)  # Tiempo de procesamiento de respuesta
                 
                 if output and 'cisco' in output.lower():
                     print("✅ Dispositivo detectado: Cisco")
-                    time.sleep(1)
+                    #time.sleep(1)
                     return 'cisco'
                 elif output and ('huawei' in output.lower() or 'vrp' in output.lower()):
                     print("✅ Dispositivo detectado: Huawei")
-                    time.sleep(1)
+                    #time.sleep(1)
                     return 'huawei'
             except:
                 print(f"   ⚠️ Comando {command} no disponible")
-                time.sleep(0.5)
+                #time.sleep(0.5)
                 continue
         
         print("⚠️ No se pudo detectar el tipo de dispositivo, asumiendo Cisco")
-        time.sleep(1)
+        #time.sleep(1)
         return 'cisco'
     
     def connect(self) -> bool:
@@ -131,28 +131,28 @@ class RouterAnalyzer:
         if paramiko is None:
             print("SSH no disponible: paramiko no está instalado")
             print("   Simulando conexión SSH...")
-            time.sleep(2)
+            #time.sleep(2)
             self.is_connected = True
             return True
             
         try:
             print(f"🔐 Iniciando conexión SSH a {hostname}:{port}")
-            time.sleep(1)
+            #time.sleep(1)
             
             print(f"   Estableciendo conexión TCP...")
-            time.sleep(2)
+            #time.sleep(2)
             
             print(f"   Negociando algoritmo de cifrado...")
-            time.sleep(1.5)
+            #time.sleep(1.5)
             
             print(f"   Autenticando usuario: {username}")
-            time.sleep(2)
+            #time.sleep(2)
             
             print(f"   Verificando credenciales...")
-            time.sleep(1.5)
+            #time.sleep(1.5)
             
             print(f"✅ Conexión SSH establecida exitosamente")
-            time.sleep(1)
+            #time.sleep(1)
             
             # Simular conexión exitosa
             self.is_connected = True
@@ -167,31 +167,31 @@ class RouterAnalyzer:
         if telnetlib is None:
             print("Telnet no disponible: telnetlib no está disponible en Python 3.13+")
             print("   Simulando conexión Telnet...")
-            time.sleep(2)
+            #time.sleep(2)
             self.is_connected = True
             return True
             
         try:
             print(f"🔐 Iniciando conexión Telnet a {hostname}:{port}")
-            time.sleep(1)
+            #time.sleep(1)
             
             print(f"   Estableciendo conexión TCP...")
-            time.sleep(1.5)
+            #time.sleep(1.5)
             
             print(f"   Esperando prompt de login...")
-            time.sleep(1)
+            #time.sleep(1)
             
             print(f"   Username: {username}")
-            time.sleep(1)
+            #time.sleep(1)
             
             print(f"   Password: ********")
-            time.sleep(2)
+            #time.sleep(2)
             
             print(f"   Verificando credenciales...")
-            time.sleep(1.5)
+            #time.sleep(1.5)
             
             print(f"✅ Conexión Telnet establecida exitosamente")
-            time.sleep(1)
+            #time.sleep(1)
             
             # Simular conexión exitosa
             self.is_connected = True
@@ -541,26 +541,26 @@ Address Type    : Unspecified''',
         
         for i, command in enumerate(commands, 1):
             print(f"[{i}/{len(commands)}] Ejecutando: {command}")
-            time.sleep(1)  # Tiempo de inicio del comando
+            #time.sleep(1)  # Tiempo de inicio del comando
             
             try:
                 print(f"   Enviando comando al dispositivo...")
-                time.sleep(1.5)  # Tiempo de envío
+                #time.sleep(1.5)  # Tiempo de envío
                 
                 output = self.execute_command(command)
                 print(f"   Procesando respuesta...")
-                time.sleep(1)  # Tiempo de procesamiento
+                #time.sleep(1)  # Tiempo de procesamiento
                 
                 analysis_results["commands_executed"].append(command)
                 analysis_results["data"][command] = output
                 
                 print(f"   ✅ Comando completado")
-                time.sleep(0.5)  # Pausa entre comandos
+                #time.sleep(0.5)  # Pausa entre comandos
                 
             except Exception as e:
                 print(f"   ❌ Error ejecutando {command}: {str(e)}")
                 analysis_results["data"][command] = f"Error: {str(e)}"
-                time.sleep(0.5)
+                #time.sleep(0.5)
         
         print(f"✅ Análisis {self.device_type.upper()} completado")
         return analysis_results
@@ -571,7 +571,12 @@ Address Type    : Unspecified''',
             "interfaces": [],
             "vrfs": [],
             "vlans": [],
-            "routing_protocols": {},
+            "routing_protocols": {
+                'ospf': {'enabled': False, 'config': ''},
+                'eigrp': {'enabled': False, 'config': ''},
+                'bgp': {'enabled': False, 'config': ''},
+                'rip': {'enabled': False, 'config': ''}
+            },
             "static_routes": [],
             "dhcp_pools": [],
             "neighbors": {}
@@ -609,10 +614,16 @@ Address Type    : Unspecified''',
         if 'show ip ospf neighbor' in analysis_data.get("data", {}):
             ospf_neighbors = self._parse_ospf_neighbors(analysis_data["data"]["show ip ospf neighbor"])
             parsed_data["neighbors"]["ospf"] = ospf_neighbors
+            # Marcar OSPF como habilitado si hay vecinos
+            if ospf_neighbors:
+                parsed_data["routing_protocols"]["ospf"]["enabled"] = True
         
         if 'show ip bgp summary' in analysis_data.get("data", {}):
             bgp_neighbors = self._parse_bgp_neighbors(analysis_data["data"]["show ip bgp summary"])
             parsed_data["neighbors"]["bgp"] = bgp_neighbors
+            # Marcar BGP como habilitado si hay vecinos
+            if bgp_neighbors:
+                parsed_data["routing_protocols"]["bgp"]["enabled"] = True
         
         return parsed_data
     
