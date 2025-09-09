@@ -36,6 +36,7 @@ class RouterManagerApp:
             'vlans': [],
             'dhcp_pools': [],
             'routing_protocols': {},
+            'static_routes': [],
             'command_history': []
         }
         
