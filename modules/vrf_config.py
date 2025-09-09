@@ -7,62 +7,9 @@ class VRFConfigFrame(tk.Frame):
         super().__init__(parent, bg='#ffffff')
         self.shared_data = shared_data
         
-        # Inicializar datos de VRF si no existen
-        if 'vrfs' not in self.shared_data or not self.shared_data['vrfs']:
-            self.shared_data['vrfs'] = [
-                {
-                    'id': 1,
-                    'name': 'CUSTOMER_A',
-                    'rd': '65001:100',
-                    'rt_import': ['65001:100', '65001:999'],
-                    'rt_export': ['65001:100'],
-                    'description': 'Cliente A - Red Corporativa',
-                    'interfaces': ['GigabitEthernet0/0/1.100', 'Serial0/1/0'],
-                    'status': 'active',
-                    'routes': [
-                        {'network': '10.100.0.0/24', 'next_hop': '10.100.0.1', 'type': 'connected'},
-                        {'network': '172.16.100.0/24', 'next_hop': '10.100.0.254', 'type': 'static'}
-                    ]
-                },
-                {
-                    'id': 2,
-                    'name': 'CUSTOMER_B',
-                    'rd': '65001:200',
-                    'rt_import': ['65001:200', '65001:999'],
-                    'rt_export': ['65001:200'],
-                    'description': 'Cliente B - Red Privada',
-                    'interfaces': ['GigabitEthernet0/0/2.200'],
-                    'status': 'active',
-                    'routes': [
-                        {'network': '10.200.0.0/24', 'next_hop': '10.200.0.1', 'type': 'connected'},
-                        {'network': '192.168.200.0/24', 'next_hop': '10.200.0.254', 'type': 'ospf'}
-                    ]
-                },
-                {
-                    'id': 3,
-                    'name': 'MGMT',
-                    'rd': '65001:999',
-                    'rt_import': ['65001:999'],
-                    'rt_export': ['65001:999'],
-                    'description': 'Red de Administración',
-                    'interfaces': ['Loopback1'],
-                    'status': 'active',
-                    'routes': [
-                        {'network': '192.168.255.0/24', 'next_hop': '192.168.255.1', 'type': 'connected'}
-                    ]
-                },
-                {
-                    'id': 4,
-                    'name': 'INTERNET',
-                    'rd': '65001:300',
-                    'rt_import': ['65001:300'],
-                    'rt_export': ['65001:300'],
-                    'description': 'Acceso a Internet compartido',
-                    'interfaces': ['Serial0/1/1'],
-                    'status': 'inactive',
-                    'routes': []
-                }
-            ]
+        # Asegurar que la lista de VRFs existe en shared_data
+        if 'vrfs' not in self.shared_data:
+            self.shared_data['vrfs'] = []
         
         self.create_widgets()
         
@@ -122,11 +69,20 @@ class VRFConfigFrame(tk.Frame):
         stats_frame.pack(fill=tk.X, pady=(0, 20))
         
         # Calcular estadísticas
-        vrfs = self.shared_data['vrfs']
+        vrfs = self.shared_data.get('vrfs', [])
         total = len(vrfs)
-        active = len([v for v in vrfs if v['status'] == 'active'])
-        total_interfaces = sum(len(v['interfaces']) for v in vrfs)
-        total_routes = sum(len(v['routes']) for v in vrfs)
+        # Como 'show ip vrf brief' no muestra estado, asumimos que todas las VRF listadas están activas
+        active = total
+        
+        # Contar interfaces asignadas a través de todas las VRF
+        total_interfaces = 0
+        for vrf in vrfs:
+            # La salida del parser junta las interfaces en un solo string
+            if vrf.get('interfaces'):
+                total_interfaces += len(vrf['interfaces'].split())
+
+        # El número de rutas no está en 'show ip vrf brief', así que lo marcamos como N/A
+        total_routes = "N/A"
         
         # Grid de estadísticas
         stats_frame.grid_columnconfigure(0, weight=1)
@@ -138,7 +94,7 @@ class VRFConfigFrame(tk.Frame):
             ("📚 Total VRFs", str(total), "#0066cc"),
             ("✅ VRFs Activas", str(active), "#28a745"),
             ("🌐 Interfaces Asignadas", str(total_interfaces), "#6f42c1"),
-            ("🔀 Total Rutas", str(total_routes), "#fd7e14")
+            ("🔀 Total Rutas", total_routes, "#fd7e14")
         ]
         
         for i, (title, value, color) in enumerate(stats):
@@ -213,11 +169,11 @@ class VRFConfigFrame(tk.Frame):
         button_frame.pack(fill=tk.X, padx=10, pady=10)
         
         view_btn = tk.Button(button_frame, text="👁️ Ver Detalles", command=self.view_vrf_details,
-                            bg='#17a2b8', fg='white', font=("Arial", 10))
+                            bg='#17a2b8', fg='white', font=("Arial", 10), state=tk.DISABLED)
         view_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         toggle_btn = tk.Button(button_frame, text="🔄 Cambiar Estado", command=self.toggle_vrf,
-                              bg='#28a745', fg='white', font=("Arial", 10))
+                              bg='#28a745', fg='white', font=("Arial", 10), state=tk.DISABLED)
         toggle_btn.pack(side=tk.LEFT, padx=(0, 10))
         
         delete_btn = tk.Button(button_frame, text="🗑️ Eliminar", command=self.delete_vrf,
@@ -238,16 +194,23 @@ class VRFConfigFrame(tk.Frame):
             self.vrf_tree.delete(item)
             
         # Agregar VRFs
-        for vrf in self.shared_data['vrfs']:
-            status_text = "Activa" if vrf['status'] == 'active' else "Inactiva"
+        for vrf in self.shared_data.get('vrfs', []):
+            # Como el estado no está disponible, lo marcamos como 'Activa'
+            status_text = "Activa"
+            
+            # Contar interfaces
+            num_interfaces = 0
+            if vrf.get('interfaces'):
+                num_interfaces = len(vrf.get('interfaces', '').split())
+
             self.vrf_tree.insert('', tk.END, values=(
-                vrf['name'],
-                vrf['rd'],
+                vrf.get('name', 'N/A'),
+                vrf.get('default_rd', 'N/A'),
                 status_text,
-                str(len(vrf['interfaces'])),
-                str(len(vrf['routes'])),
-                vrf['description']
-            ), tags=(vrf['status'],))
+                num_interfaces,
+                "N/A",  # Rutas no disponibles
+                vrf.get('description', '') # Descripción no viene del parser
+            ), tags=('active',))
         
         # Configurar tags para colores
         self.vrf_tree.tag_configure('active', foreground='#28a745')
@@ -336,17 +299,19 @@ class VRFConfigFrame(tk.Frame):
         
     def view_vrf_details(self):
         """Ver detalles de una VRF"""
-        selection = self.vrf_tree.selection()
-        if not selection:
-            messagebox.showwarning("Selección", "Por favor selecciona una VRF para ver detalles")
-            return
+        messagebox.showinfo("Función no disponible", 
+                            "La visualización de detalles aún no está implementada con datos en vivo.")
+        # selection = self.vrf_tree.selection()
+        # if not selection:
+        #     messagebox.showwarning("Selección", "Por favor selecciona una VRF para ver detalles")
+        #     return
             
-        item = self.vrf_tree.item(selection[0])
-        vrf_name = item['values'][0]
+        # item = self.vrf_tree.item(selection[0])
+        # vrf_name = item['values'][0]
         
-        vrf = next((v for v in self.shared_data['vrfs'] if v['name'] == vrf_name), None)
-        if vrf:
-            self.open_vrf_details_dialog(vrf)
+        # vrf = next((v for v in self.shared_data['vrfs'] if v['name'] == vrf_name), None)
+        # if vrf:
+        #     self.open_vrf_details_dialog(vrf)
             
     def open_vrf_details_dialog(self, vrf):
         """Abrir diálogo de detalles de VRF"""
@@ -477,21 +442,23 @@ class VRFConfigFrame(tk.Frame):
         
     def toggle_vrf(self):
         """Cambiar estado de VRF"""
-        selection = self.vrf_tree.selection()
-        if not selection:
-            messagebox.showwarning("Selección", "Por favor selecciona una VRF")
-            return
+        messagebox.showinfo("Función no disponible", 
+                            "El cambio de estado de VRF no es aplicable con los datos actuales.")
+        # selection = self.vrf_tree.selection()
+        # if not selection:
+        #     messagebox.showwarning("Selección", "Por favor selecciona una VRF")
+        #     return
             
-        item = self.vrf_tree.item(selection[0])
-        vrf_name = item['values'][0]
+        # item = self.vrf_tree.item(selection[0])
+        # vrf_name = item['values'][0]
         
-        vrf = next((v for v in self.shared_data['vrfs'] if v['name'] == vrf_name), None)
-        if vrf:
-            new_status = 'inactive' if vrf['status'] == 'active' else 'active'
-            vrf['status'] = new_status
-            self.refresh_vrf_list()
-            status_text = "activada" if new_status == 'active' else "desactivada"
-            messagebox.showinfo("Estado", f"VRF {vrf_name} {status_text}")
+        # vrf = next((v for v in self.shared_data['vrfs'] if v['name'] == vrf_name), None)
+        # if vrf:
+        #     new_status = 'inactive' if vrf['status'] == 'active' else 'active'
+        #     vrf['status'] = new_status
+        #     self.refresh_vrf_list()
+        #     status_text = "activada" if new_status == 'active' else "desactivada"
+        #     messagebox.showinfo("Estado", f"VRF {vrf_name} {status_text}")
             
     def delete_vrf(self):
         """Eliminar VRF"""
@@ -538,33 +505,40 @@ class VRFConfigFrame(tk.Frame):
         
         # Generar comandos
         commands = ["# Configuración de VRFs"]
-        for vrf in self.shared_data['vrfs']:
-            if vrf['status'] == 'active':
-                commands.extend([
-                    f"vrf definition {vrf['name']}",
-                    f"  rd {vrf['rd']}"
-                ])
+        for vrf in self.shared_data.get('vrfs', []):
+            # Asumimos que todas las VRF detectadas deben ser configuradas (están activas)
+            commands.extend([
+                f"vrf definition {vrf.get('name', 'N/A')}",
+                f"  rd {vrf.get('default_rd', 'N/A')}"
+            ])
+            
+            # Los RTs y las interfaces no se obtienen de 'show ip vrf brief', 
+            # así que esta parte no generará comandos adicionales con los datos actuales.
+            # Se deja la lógica por si se implementa un parsing más detallado en el futuro.
+            
+            for rt in vrf.get('rt_import', []):
+                commands.append(f"  route-target import {rt}")
                 
-                for rt in vrf['rt_import']:
-                    commands.append(f"  route-target import {rt}")
-                    
-                for rt in vrf['rt_export']:
-                    commands.append(f"  route-target export {rt}")
-                    
-                commands.extend([
-                    "  address-family ipv4",
-                    "  exit-address-family",
-                    "  exit",
-                    f"# Asignación de interfaces para {vrf['name']}"
-                ])
+            for rt in vrf.get('rt_export', []):
+                commands.append(f"  route-target export {rt}")
                 
-                for interface in vrf['interfaces']:
+            commands.extend([
+                "  address-family ipv4",
+                "  exit-address-family",
+                "  exit",
+                f"# Asignación de interfaces para {vrf.get('name', 'N/A')}"
+            ])
+            
+            # La salida del parser junta las interfaces en un solo string
+            interfaces_str = vrf.get('interfaces', '')
+            if interfaces_str:
+                for interface in interfaces_str.split():
                     commands.extend([
                         f"interface {interface}",
-                        f"  vrf forwarding {vrf['name']}",
+                        f"  vrf forwarding {vrf.get('name', 'N/A')}",
                         "  exit"
                     ])
-                commands.append("")
+            commands.append("")
         
         terminal_text.insert(tk.END, "\n".join(commands))
         terminal_text.config(state=tk.DISABLED)

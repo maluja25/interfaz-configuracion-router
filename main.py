@@ -8,6 +8,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import json
 from datetime import datetime
+from modules.auth_dialog import AuthDialog
 from modules.dashboard import DashboardFrame
 from modules.interface_config import InterfaceConfigFrame
 from modules.routing_config import RoutingConfigFrame
@@ -18,7 +19,7 @@ from modules.monitoring import MonitoringFrame
 from modules.command_interface import CommandInterfaceFrame
 
 class RouterManagerApp:
-    def __init__(self):
+    def __init__(self, connection_data=None):
         self.root = tk.Tk()
         self.root.title("Router Manager")
         self.root.geometry("1400x900")
@@ -26,8 +27,9 @@ class RouterManagerApp:
         
         # Variables de estado
         self.current_section = tk.StringVar(value="dashboard")
-        self.router_status = "Conectado"
-        self.router_ip = "192.168.1.1"
+        self.connection_data = connection_data or {}
+        self.router_status = "Conectado" if connection_data else "Desconectado"
+        self.router_ip = connection_data.get('hostname', '192.168.1.1') if connection_data else "No configurado"
         
         # Datos compartidos entre módulos
         self.shared_data = {
@@ -37,8 +39,15 @@ class RouterManagerApp:
             'dhcp_pools': [],
             'routing_protocols': {},
             'static_routes': [],
-            'command_history': []
+            'command_history': [],
+            'analysis_data': {},
+            'parsed_data': {}
         }
+        
+        # Cargar datos del análisis si están disponibles
+        if connection_data and 'parsed_data' in connection_data:
+            self.shared_data.update(connection_data['parsed_data'])
+            self.shared_data['analysis_data'] = connection_data.get('analysis_data', {})
         
         # Configurar estilos
         self.setup_styles()
@@ -220,6 +229,18 @@ class RouterManagerApp:
                            pady=5)
         ip_badge.pack(side=tk.RIGHT)
         
+        # Badge de protocolo (si hay datos de conexión)
+        if self.connection_data:
+            protocol = self.connection_data.get('protocol', 'SSH2')
+            protocol_badge = tk.Label(status_frame,
+                                     text=f"📡 {protocol}",
+                                     font=("Arial", 10),
+                                     bg='#e3f2fd',
+                                     fg='#1976d2',
+                                     padx=10,
+                                     pady=5)
+            protocol_badge.pack(side=tk.RIGHT, padx=(0, 10))
+        
     def init_content_frames(self):
         """Inicializar todos los frames de contenido"""
         self.content_frames = {}
@@ -307,6 +328,24 @@ class RouterManagerApp:
         if messagebox.askokcancel("Salir", "¿Deseas cerrar Router Manager?"):
             self.root.destroy()
 
-if __name__ == "__main__":
-    app = RouterManagerApp()
+def main():
+    """Función principal de la aplicación"""
+    # Mostrar diálogo de autenticación
+    auth_dialog = AuthDialog()
+    connection_data = auth_dialog.show()
+    
+    # Si se canceló la conexión, salir
+    if connection_data is None:
+        print("Conexión cancelada por el usuario")
+        return
+    
+    # Mostrar información de conexión
+    print(f"Conectando a {connection_data['hostname']} via {connection_data['protocol']}")
+    print(f"Usuario: {connection_data.get('username', 'N/A')}")
+    
+    # Iniciar aplicación principal
+    app = RouterManagerApp(connection_data)
     app.run()
+
+if __name__ == "__main__":
+    main()

@@ -125,11 +125,11 @@ class InterfaceConfigFrame(tk.Frame):
         stats_frame.pack(fill=tk.X, pady=(0, 20))
         
         # Calcular estadísticas
-        interfaces = self.shared_data['interfaces']
+        interfaces = self.shared_data.get('interfaces', [])
         total = len(interfaces)
-        active = len([i for i in interfaces if i['status'] == 'up'])
-        inactive = len([i for i in interfaces if i['status'] == 'down'])
-        unconfigured = len([i for i in interfaces if not i['ip']])
+        active = len([i for i in interfaces if i.get('status', '').lower() == 'up'])
+        inactive = len([i for i in interfaces if i.get('status', '').lower() == 'down'])
+        unconfigured = len([i for i in interfaces if not i.get('ip_address', '')])
         
         # Grid de estadísticas
         stats_frame.grid_columnconfigure(0, weight=1)
@@ -224,15 +224,15 @@ class InterfaceConfigFrame(tk.Frame):
             
         # Agregar interfaces
         for interface in self.shared_data['interfaces']:
-            status_text = "UP" if interface['status'] == 'up' else "DOWN"
+            status_text = "UP" if interface.get('status', '').lower() == 'up' else "DOWN"
             self.interface_tree.insert('', tk.END, values=(
-                interface['name'],
-                interface['type'],
-                interface['ip'] or 'N/A',
-                interface['mask'] or 'N/A',
+                interface.get('name', 'N/A'),
+                interface.get('type', 'Ethernet'),  # Tipo por defecto
+                interface.get('ip_address', 'N/A'),
+                interface.get('mask', 'N/A'),
                 status_text,
-                interface['description']
-            ), tags=(interface['status'],))
+                interface.get('description', 'N/A')
+            ), tags=(interface.get('status', 'down'),))
         
         # Configurar tags para colores
         self.interface_tree.tag_configure('up', foreground='#28a745')
@@ -250,14 +250,14 @@ class InterfaceConfigFrame(tk.Frame):
         interface_name = item['values'][0]
         
         # Buscar la interfaz en los datos
-        interface = next((i for i in self.shared_data['interfaces'] if i['name'] == interface_name), None)
+        interface = next((i for i in self.shared_data['interfaces'] if i.get('name') == interface_name), None)
         if interface:
             self.open_edit_dialog(interface)
             
     def open_edit_dialog(self, interface):
         """Abrir diálogo de edición"""
         dialog = tk.Toplevel(self)
-        dialog.title(f"Configurar {interface['name']}")
+        dialog.title(f"Configurar {interface.get('name', 'N/A')}")
         dialog.geometry("500x600")
         dialog.configure(bg='#ffffff')
         dialog.transient(self)
@@ -270,15 +270,15 @@ class InterfaceConfigFrame(tk.Frame):
         dialog.geometry(f"500x600+{x}+{y}")
         
         # Variables para el formulario
-        ip_var = tk.StringVar(value=interface['ip'])
-        mask_var = tk.StringVar(value=interface['mask'])
-        desc_var = tk.StringVar(value=interface['description'])
-        status_var = tk.StringVar(value=interface['status'])
-        duplex_var = tk.StringVar(value=interface['duplex'])
-        speed_var = tk.StringVar(value=interface['speed'])
+        ip_var = tk.StringVar(value=interface.get('ip_address', ''))
+        mask_var = tk.StringVar(value=interface.get('mask', ''))
+        desc_var = tk.StringVar(value=interface.get('description', ''))
+        status_var = tk.StringVar(value=interface.get('status', 'down'))
+        duplex_var = tk.StringVar(value=interface.get('duplex', 'auto'))
+        speed_var = tk.StringVar(value=interface.get('speed', 'auto'))
         
         # Título
-        title_label = tk.Label(dialog, text=f"Configurar {interface['name']}",
+        title_label = tk.Label(dialog, text=f"Configurar {interface.get('name', 'N/A')}",
                               font=("Arial", 16, "bold"), bg='#ffffff', fg='#030213')
         title_label.pack(pady=20)
         
@@ -337,9 +337,9 @@ class InterfaceConfigFrame(tk.Frame):
         info_frame = tk.LabelFrame(physical_frame, text="Información", bg='#ffffff', fg='#030213')
         info_frame.pack(fill=tk.X, pady=(20, 0))
         
-        tk.Label(info_frame, text=f"Nombre: {interface['name']}", font=("Arial", 10),
+        tk.Label(info_frame, text=f"Nombre: {interface.get('name', 'N/A')}", font=("Arial", 10),
                 bg='#ffffff', fg='#666666').pack(anchor=tk.W, padx=10, pady=5)
-        tk.Label(info_frame, text=f"Tipo: {interface['type']}", font=("Arial", 10),
+        tk.Label(info_frame, text=f"Tipo: {interface.get('type', 'Ethernet')}", font=("Arial", 10),
                 bg='#ffffff', fg='#666666').pack(anchor=tk.W, padx=10, pady=5)
         
         # Botones
@@ -347,7 +347,7 @@ class InterfaceConfigFrame(tk.Frame):
         button_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
         
         def save_changes():
-            interface['ip'] = ip_var.get()
+            interface['ip_address'] = ip_var.get()
             interface['mask'] = mask_var.get()
             interface['description'] = desc_var.get()
             interface['status'] = status_var.get()
@@ -355,7 +355,7 @@ class InterfaceConfigFrame(tk.Frame):
             interface['speed'] = speed_var.get()
             
             self.refresh_interface_list()
-            messagebox.showinfo("Éxito", f"Interfaz {interface['name']} configurada correctamente")
+            messagebox.showinfo("Éxito", f"Interfaz {interface.get('name', 'N/A')} configurada correctamente")
             dialog.destroy()
         
         cancel_btn = tk.Button(button_frame, text="Cancelar", command=dialog.destroy,
@@ -376,9 +376,9 @@ class InterfaceConfigFrame(tk.Frame):
         item = self.interface_tree.item(selection[0])
         interface_name = item['values'][0]
         
-        interface = next((i for i in self.shared_data['interfaces'] if i['name'] == interface_name), None)
+        interface = next((i for i in self.shared_data['interfaces'] if i.get('name') == interface_name), None)
         if interface:
-            new_status = 'down' if interface['status'] == 'up' else 'up'
+            new_status = 'down' if interface.get('status', 'down') == 'up' else 'up'
             interface['status'] = new_status
             self.refresh_interface_list()
             messagebox.showinfo("Estado", f"Interfaz {interface_name} {'activada' if new_status == 'up' else 'desactivada'}")
@@ -414,11 +414,11 @@ class InterfaceConfigFrame(tk.Frame):
         # Generar comandos
         commands = ["# Configuración de interfaces activas"]
         for interface in self.shared_data['interfaces']:
-            if interface['ip'] and interface['status'] == 'up':
+            if interface.get('ip_address') and interface.get('status') == 'up':
                 commands.extend([
-                    f"interface {interface['name']}",
-                    f"  ip address {interface['ip']} {interface['mask']}",
-                    f"  description {interface['description']}",
+                    f"interface {interface.get('name', 'N/A')}",
+                    f"  ip address {interface.get('ip_address', '')} {interface.get('mask', '')}",
+                    f"  description {interface.get('description', '')}",
                     "  no shutdown",
                     "  exit"
                 ])

@@ -77,6 +77,9 @@ class DashboardFrame(tk.Frame):
         # Estado de interfaces
         self.create_interface_status(scrollable_frame)
         
+        # Información del análisis
+        self.create_analysis_info(scrollable_frame)
+        
         # Configurar scroll con rueda del mouse
         def _on_mousewheel(event):
             main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
@@ -225,31 +228,45 @@ class DashboardFrame(tk.Frame):
         table_frame.pack(fill=tk.BOTH, expand=True)
         
         # Crear Treeview para la tabla
-        columns = ('Interfaz', 'Tipo', 'Estado', 'IP', 'Velocidad')
+        columns = ('Interfaz', 'IP', 'Estado', 'Protocolo', 'Método')
         tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=8)
         
         # Configurar columnas
         tree.heading('Interfaz', text='Interfaz')
-        tree.heading('Tipo', text='Tipo')
-        tree.heading('Estado', text='Estado')
         tree.heading('IP', text='Dirección IP')
-        tree.heading('Velocidad', text='Velocidad')
+        tree.heading('Estado', text='Estado')
+        tree.heading('Protocolo', text='Protocolo')
+        tree.heading('Método', text='Método')
         
         tree.column('Interfaz', width=200)
-        tree.column('Tipo', width=100)
-        tree.column('Estado', width=100)
         tree.column('IP', width=150)
-        tree.column('Velocidad', width=100)
+        tree.column('Estado', width=100)
+        tree.column('Protocolo', width=100)
+        tree.column('Método', width=100)
         
-        # Agregar datos
-        for interface in self.interface_status:
-            tree.insert('', tk.END, values=(
-                interface['name'],
-                interface['type'],
-                interface['status'],
-                interface['ip'],
-                interface['speed']
-            ))
+        # Obtener datos de interfaces del análisis
+        interfaces_data = self.shared_data.get('interfaces', [])
+        
+        if interfaces_data:
+            # Usar datos reales del análisis
+            for interface in interfaces_data:
+                tree.insert('', tk.END, values=(
+                    interface.get('name', 'N/A'),
+                    interface.get('ip_address', 'N/A'),
+                    interface.get('status', 'N/A'),
+                    interface.get('protocol', 'N/A'),
+                    interface.get('method', 'N/A')
+                ))
+        else:
+            # Usar datos de ejemplo si no hay análisis
+            for interface in self.interface_status:
+                tree.insert('', tk.END, values=(
+                    interface['name'],
+                    interface['ip'],
+                    interface['status'],
+                    'N/A',
+                    'N/A'
+                ))
         
         # Scrollbar para la tabla
         table_scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
@@ -258,6 +275,71 @@ class DashboardFrame(tk.Frame):
         # Empaquetar tabla y scrollbar
         tree.pack(side='left', fill='both', expand=True)
         table_scrollbar.pack(side='right', fill='y')
+    
+    def create_analysis_info(self, parent):
+        """Crear sección de información del análisis"""
+        analysis_frame = tk.Frame(parent, bg='#ffffff')
+        analysis_frame.pack(fill=tk.X, pady=(30, 0))
+        
+        # Título
+        title_label = tk.Label(analysis_frame,
+                              text="📊 Información del Análisis",
+                              font=("Arial", 16, "bold"),
+                              bg='#ffffff',
+                              fg='#030213')
+        title_label.pack(anchor=tk.W, pady=(0, 15))
+        
+        # Frame para mostrar información del análisis
+        info_frame = tk.Frame(analysis_frame, bg='white', relief=tk.SOLID, borderwidth=1)
+        info_frame.pack(fill=tk.X)
+        
+        # Obtener datos del análisis
+        analysis_data = self.shared_data.get('analysis_data', {})
+        parsed_data = self.shared_data.get('parsed_data', {})
+        
+        if analysis_data:
+            # Mostrar información del análisis
+            info_text = f"Análisis realizado: {analysis_data.get('timestamp', 'N/A')}\n"
+            info_text += f"Hostname: {analysis_data.get('hostname', 'N/A')}\n"
+            info_text += f"Protocolo: {analysis_data.get('protocol', 'N/A')}\n"
+            info_text += f"Comandos ejecutados: {len(analysis_data.get('commands_executed', []))}\n\n"
+            
+            # Información de VRF
+            vrfs = parsed_data.get('vrfs', [])
+            if vrfs:
+                info_text += f"VRFs encontradas: {len(vrfs)}\n"
+                for vrf in vrfs[:3]:  # Mostrar solo los primeros 3
+                    info_text += f"  - {vrf.get('name', 'N/A')}\n"
+            
+            # Información de VLANs
+            vlans = parsed_data.get('vlans', [])
+            if vlans:
+                info_text += f"\nVLANs encontradas: {len(vlans)}\n"
+                for vlan in vlans[:3]:  # Mostrar solo las primeras 3
+                    info_text += f"  - VLAN {vlan.get('id', 'N/A')}: {vlan.get('name', 'N/A')}\n"
+            
+            # Información de protocolos
+            neighbors = parsed_data.get('neighbors', {})
+            if neighbors.get('ospf'):
+                info_text += f"\nVecinos OSPF: {len(neighbors['ospf'])}\n"
+            if neighbors.get('bgp'):
+                info_text += f"Vecinos BGP: {len(neighbors['bgp'])}\n"
+            
+            # Rutas estáticas
+            static_routes = parsed_data.get('static_routes', [])
+            if static_routes:
+                info_text += f"\nRutas estáticas: {len(static_routes)}\n"
+                for route in static_routes[:3]:  # Mostrar solo las primeras 3
+                    info_text += f"  - {route.get('network', 'N/A')} via {route.get('via', 'N/A')}\n"
+        else:
+            info_text = "No hay datos de análisis disponibles.\nConecta al router para realizar un análisis automático."
+        
+        # Crear widget de texto para mostrar la información
+        text_widget = tk.Text(info_frame, height=12, wrap=tk.WORD, font=("Courier", 9),
+                             bg='#f8f9fa', fg='#030213', relief=tk.FLAT, padx=15, pady=15)
+        text_widget.insert(tk.END, info_text)
+        text_widget.config(state=tk.DISABLED)
+        text_widget.pack(fill=tk.BOTH, expand=True)
         
     def refresh(self):
         """Refrescar los datos del dashboard"""

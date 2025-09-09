@@ -1,0 +1,16 @@
+# Dependencias para Router Manager
+# Instalar con: pip install -r requirements.txt
+
+# Para conexiones SSH (opcional)
+paramiko>=2.8.0
+
+# Para conexiones Telnet (opcional, ya que telnetlib3 está instalado)
+telnetlib3>=2.0.0
+
+# Dependencias estándar de Python (ya incluidas)
+# tkinter - Interfaz gráfica (incluida en Python)
+# json - Manejo de JSON (incluida en Python)
+# time - Funciones de tiempo (incluida en Python)
+# re - Expresiones regulares (incluida en Python)
+# os - Funciones del sistema operativo (incluida en Python)
+# typing - Anotaciones de tipo (incluida en Python)
