@@ -7,7 +7,7 @@ import time
 
 # Añadir el directorio modules al path para poder importar router_analyzer
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from router_analyzer import RouterAnalyzer
+from router_analyzer.router_analyzer import RouterAnalyzer
 
 class AuthDialog:
     def __init__(self):
@@ -149,6 +149,10 @@ class AuthDialog:
         self.serial_port_label = tk.Label(protocol_frame, text="Puerto:", bg='white', anchor=tk.W)
         self.serial_port_var = tk.StringVar(value="COM7")
         self.serial_port_entry = tk.Entry(protocol_frame, textvariable=self.serial_port_var, width=10)
+        # Baudios (para Serial)
+        self.baudrate_label = tk.Label(protocol_frame, text="Baudios:", bg='white', anchor=tk.W)
+        self.baudrate_var = tk.StringVar(value="9600")
+        self.baudrate_entry = tk.Entry(protocol_frame, textvariable=self.baudrate_var, width=8)
 
         # Hostname
         self.hostname_frame = tk.Frame(row1_frame, bg='white')
@@ -159,6 +163,15 @@ class AuthDialog:
         self.hostname_var = tk.StringVar(value="192.168.1.1")
         self.hostname_entry = ttk.Entry(self.hostname_frame, textvariable=self.hostname_var, width=20)
         self.hostname_entry.pack(anchor=tk.W, pady=(2, 0))
+
+        # Fabricante conocido (opcional)
+        vendor_frame = tk.Frame(main_config_frame, bg='white')
+        vendor_frame.pack(fill=tk.X, pady=(0, 10))
+        tk.Label(vendor_frame, text="Fabricante (opcional):", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
+        self.vendor_hint_var = tk.StringVar(value="Auto")
+        vendor_cb = ttk.Combobox(vendor_frame, textvariable=self.vendor_hint_var,
+                                 values=["Auto", "Huawei", "Cisco", "Juniper"], state="readonly", width=12)
+        vendor_cb.pack(anchor=tk.W, pady=(2,0))
         
         # Segunda fila: Puerto
         self.port_frame = tk.Frame(main_config_frame, bg='white')
@@ -249,7 +262,13 @@ class AuthDialog:
             'save_session': tk.BooleanVar(value=False),
             'open_in_tab': tk.BooleanVar(value=True)
         }
-        
+
+        # Modo rápido
+        self.fast_mode_var = tk.BooleanVar(value=True)
+        fast_cb = tk.Checkbutton(options_frame, text='Acelerar análisis (modo rápido)',
+                                 variable=self.fast_mode_var, bg='white', anchor=tk.W)
+        fast_cb.pack(side=tk.LEFT, padx=(0, 20))
+
         options = [
             ('show_on_startup', 'Mostrar conexión rápida al iniciar'),
             ('save_session', 'Guardar sesión'),
@@ -296,6 +315,8 @@ class AuthDialog:
             # Ocultar controles de puerto serial
             self.serial_port_label.pack_forget()
             self.serial_port_entry.pack_forget()
+            self.baudrate_label.pack_forget()
+            self.baudrate_entry.pack_forget()
             # Mostrar campo de hostname y puerto de red
             if not self.port_frame.winfo_ismapped():
                 self.port_frame.pack(fill=tk.X, pady=(0, 10))
@@ -306,6 +327,8 @@ class AuthDialog:
             # Ocultar controles de puerto serial
             self.serial_port_label.pack_forget()
             self.serial_port_entry.pack_forget()
+            self.baudrate_label.pack_forget()
+            self.baudrate_entry.pack_forget()
             # Mostrar campo de hostname y puerto de red
             if not self.port_frame.winfo_ismapped():
                 self.port_frame.pack(fill=tk.X, pady=(0, 10))
@@ -316,6 +339,8 @@ class AuthDialog:
             # Mostrar controles de puerto serial
             self.serial_port_label.pack(side=tk.LEFT, padx=(10, 5))
             self.serial_port_entry.pack(side=tk.LEFT)
+            self.baudrate_label.pack(side=tk.LEFT, padx=(10, 5))
+            self.baudrate_entry.pack(side=tk.LEFT)
             # Ocultar campo de hostname y puerto de red
             if self.port_frame.winfo_ismapped():
                 self.port_frame.pack_forget()
@@ -353,7 +378,10 @@ class AuthDialog:
             'protocol': self.protocol_var.get(),
             'username': self.username_var.get(),
             'password': self.password_var.get(),
-            'auth_methods': {k: v.get() for k, v in self.auth_methods.items()}
+            'auth_methods': {k: v.get() for k, v in self.auth_methods.items()},
+            'fast_mode': self.fast_mode_var.get(),
+            'vendor_hint': self.vendor_hint_var.get(),
+            'baudrate': self.baudrate_var.get() if self.protocol_var.get() == 'Serial' else ''
         }
         
         self.saved_credentials[cred_name] = credentials
@@ -400,7 +428,10 @@ class AuthDialog:
             'password': self.password_var.get() if self.use_username.get() else '',
             'saved_credentials': self.saved_creds_var.get(),
             'auth_methods': {k: v.get() for k, v in self.auth_methods.items()},
-            'session_options': {k: v.get() for k, v in self.session_options.items()}
+            'session_options': {k: v.get() for k, v in self.session_options.items()},
+            'fast_mode': self.fast_mode_var.get(),
+            'vendor_hint': (self.vendor_hint_var.get() or 'Auto'),
+            'baudrate': self.baudrate_var.get() if protocol == 'Serial' else ''
         }
         
         # Si usa credenciales guardadas, cargar los datos

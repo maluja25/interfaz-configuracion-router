@@ -3,11 +3,9 @@ from tkinter import ttk, messagebox, scrolledtext
 import re
 from typing import Dict, List, Any, Optional, Tuple
 
-# Constantes para la configuración de protocolos de enrutamiento
+# Constantes para la configuración de protocolos de enrutamiento (solo OSPF y BGP)
 PROTOCOL_OSPF = 'ospf'
-PROTOCOL_EIGRP = 'eigrp'
 PROTOCOL_BGP = 'bgp'
-PROTOCOL_RIP = 'rip'
 
 # Constantes para los estados de los protocolos
 ENABLED = 'enabled'
@@ -35,7 +33,7 @@ class RoutingConfigFrame(tk.Frame):
     """Frame para la configuración de protocolos de enrutamiento y rutas estáticas.
     
     Esta clase gestiona la interfaz de usuario para configurar protocolos de enrutamiento
-    dinámicos (OSPF, EIGRP, BGP, RIP) y rutas estáticas.
+    dinámicos (OSPF y BGP) y rutas estáticas.
     """
     
     def __init__(self, parent: tk.Widget, shared_data: Dict[str, Any]) -> None:
@@ -52,8 +50,8 @@ class RoutingConfigFrame(tk.Frame):
         if 'routing_protocols' not in self.shared_data:
             self.shared_data['routing_protocols'] = {}
             
-        # Asegurar que todos los protocolos estén inicializados
-        for protocol in [PROTOCOL_OSPF, PROTOCOL_EIGRP, PROTOCOL_BGP, PROTOCOL_RIP]:
+        # Asegurar que los protocolos soportados estén inicializados
+        for protocol in [PROTOCOL_OSPF, PROTOCOL_BGP]:
             if protocol not in self.shared_data['routing_protocols']:
                 self.shared_data['routing_protocols'][protocol] = {ENABLED: False, CONFIG: ''}
             else:
@@ -76,6 +74,9 @@ class RoutingConfigFrame(tk.Frame):
         self.configure(bg=COLOR_WHITE)
         self.pack(fill=tk.BOTH, expand=True)
         
+        # Diccionario para badges de estado por protocolo
+        self.status_badges: Dict[str, tk.Label] = {}
+
         # Inicializar la interfaz de usuario
         self._setup_ui()
 
@@ -87,9 +88,7 @@ class RoutingConfigFrame(tk.Frame):
         """
         return {
             PROTOCOL_OSPF: tk.BooleanVar(value=self.shared_data['routing_protocols'][PROTOCOL_OSPF][ENABLED]),
-            PROTOCOL_EIGRP: tk.BooleanVar(value=self.shared_data['routing_protocols'][PROTOCOL_EIGRP][ENABLED]),
-            PROTOCOL_BGP: tk.BooleanVar(value=self.shared_data['routing_protocols'][PROTOCOL_BGP][ENABLED]),
-            PROTOCOL_RIP: tk.BooleanVar(value=self.shared_data['routing_protocols'][PROTOCOL_RIP][ENABLED])
+            PROTOCOL_BGP: tk.BooleanVar(value=self.shared_data['routing_protocols'][PROTOCOL_BGP][ENABLED])
         }
     
     def _setup_ui(self) -> None:
@@ -99,7 +98,7 @@ class RoutingConfigFrame(tk.Frame):
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Título y subtítulo
-        title = ttk.Label(main_frame, text="Protocolos de Enrutamiento", font=("Arial", 18, "bold"), background="white")
+        title = ttk.Label(main_frame, text="Enrutamiento", font=("Arial", 18, "bold"), background="white")
         title.pack(anchor="w")
         
         subtitle = ttk.Label(main_frame, text="Configura protocolos dinámicos y rutas estáticas", font=("Arial", 10), background="white")
@@ -134,12 +133,10 @@ class RoutingConfigFrame(tk.Frame):
         protocols_frame = ttk.Frame(parent, style="Card.TFrame")
         protocols_frame.pack(fill=tk.BOTH, expand=True, pady=10)
 
-        # Definición de los protocolos disponibles con su información
+        # Definición de los protocolos disponibles con su información (solo OSPF y BGP)
         protocols = [
             ("OSPF (Open Shortest Path First)", "Protocolo de estado de enlace para redes internas", PROTOCOL_OSPF),
-            ("EIGRP (Enhanced Interior Gateway Routing Protocol)", "Protocolo propietario de Cisco", PROTOCOL_EIGRP),
-            ("BGP (Border Gateway Protocol)", "Protocolo para enrutamiento entre dominios", PROTOCOL_BGP),
-            ("RIP (Routing Information Protocol)", "Protocolo de enrutamiento de vector distancia simple", PROTOCOL_RIP)
+            ("BGP (Border Gateway Protocol)", "Protocolo para enrutamiento entre dominios", PROTOCOL_BGP)
         ]
 
         # Calcular el número de filas necesarias para la cuadrícula
@@ -164,7 +161,7 @@ class RoutingConfigFrame(tk.Frame):
             parent: Widget padre donde se colocará la tarjeta
             name: Nombre completo del protocolo
             description: Descripción del protocolo
-            protocol_id: Identificador del protocolo (ospf, eigrp, bgp, rip)
+            protocol_id: Identificador del protocolo (ospf, bgp)
             
         Returns:
             Frame que contiene la tarjeta del protocolo
@@ -187,8 +184,9 @@ class RoutingConfigFrame(tk.Frame):
         # Extraer el nombre corto del protocolo (primera palabra)
         protocol_name_short = name.split(" ")[0]
         
-        # Crear la sección de encabezado en el header_frame
-        self._create_card_header(header_frame, name, protocol_id)
+        # Crear la sección de encabezado en el header_frame y guardar badge
+        _name_label, _status_badge = self._create_card_header(header_frame, name, protocol_id)
+        self.status_badges[protocol_id] = _status_badge
         
         # Frame para el contenido con padding
         content_frame = tk.Frame(card_frame, bg=COLOR_WHITE, padx=15, pady=15)
@@ -208,6 +206,18 @@ class RoutingConfigFrame(tk.Frame):
         self._create_config_section(content_frame, protocol_name_short, protocol_id)
         
         return card_frame
+
+    def resync_protocol_states(self) -> None:
+        """Sincroniza los switches y badges con shared_data tras análisis."""
+        try:
+            for protocol_id, var in self.protocol_vars.items():
+                target_state = bool(self.shared_data.get('routing_protocols', {})
+                                    .get(protocol_id, {})
+                                    .get(ENABLED, False))
+                var.set(target_state)
+                self.toggle_protocol(protocol_id, self.status_badges.get(protocol_id))
+        except Exception as e:
+            print(f"Error al sincronizar estados de protocolos: {e}")
         
     def _create_card_header(self, parent: tk.Frame, name: str, protocol_id: str) -> Tuple[tk.Label, tk.Label]:
         """Crea la sección de encabezado de la tarjeta de protocolo.
@@ -226,9 +236,7 @@ class RoutingConfigFrame(tk.Frame):
         # Icono para el protocolo (usando emoji como placeholder)
         protocol_icons = {
             PROTOCOL_OSPF: "🌐",
-            PROTOCOL_EIGRP: "🔄",
             PROTOCOL_BGP: "🌍",
-            PROTOCOL_RIP: "📡"
         }
         
         icon = protocol_icons.get(protocol_id, "🔀")
@@ -636,11 +644,6 @@ class RoutingConfigFrame(tk.Frame):
             if not re.search(r'(network\s+[\d\.]+\s+[\d\.]+\s+area\s+\d+)', config_text):
                 return False, "La configuración de OSPF debe incluir al menos una definición de red y área."
                 
-        elif protocol_id == PROTOCOL_EIGRP:
-            # Verificar que la configuración de EIGRP contenga un número de sistema autónomo
-            if not re.search(r'router\s+eigrp\s+\d+', config_text):
-                return False, "La configuración de EIGRP debe incluir un número de sistema autónomo."
-                
         elif protocol_id == PROTOCOL_BGP:
             # Verificar que la configuración de BGP contenga un número de sistema autónomo
             if not re.search(r'router\s+bgp\s+\d+', config_text):
@@ -1016,25 +1019,11 @@ class RoutingConfigFrame(tk.Frame):
                         if network.get('network') and network.get('wildcard') and network.get('area'):
                             commands.append(f"  network {network['network']} {network['wildcard']} area {network['area']}")
                 
-                elif protocol_id == PROTOCOL_EIGRP:
-                    commands.append(f"router eigrp {protocol_data.get('as_number', '1')}")
-                    for network in protocol_data.get('networks', []):
-                        if network.get('network') and network.get('wildcard'):
-                            commands.append(f"  network {network['network']} {network['wildcard']}")
-                
                 elif protocol_id == PROTOCOL_BGP:
                     commands.append(f"router bgp {protocol_data.get('as_number', '1')}")
                     for neighbor in protocol_data.get('neighbors', []):
                         if neighbor.get('ip') and neighbor.get('remote_as'):
                             commands.append(f"  neighbor {neighbor['ip']} remote-as {neighbor['remote_as']}")
-                
-                elif protocol_id == PROTOCOL_RIP:
-                    commands.append("router rip")
-                    if protocol_data.get('version') == '2':
-                        commands.append("  version 2")
-                    for network in protocol_data.get('networks', []):
-                        if network.get('network'):
-                            commands.append(f"  network {network['network']}")
         except Exception as e:
             print(f"Error al generar comandos de protocolos: {str(e)}")
             

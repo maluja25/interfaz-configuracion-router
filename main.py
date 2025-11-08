@@ -4,7 +4,6 @@ Router Manager - Aplicación de gestión de routers industriales
 
 Esta aplicación proporciona una interfaz gráfica para la configuración y
 monitoreo de routers industriales, permitiendo gestionar interfaces,
-protocolos de enrutamiento, VRFs y más.
 
 Autor: Universidad
 Versión: 1.0.0
@@ -12,6 +11,9 @@ Versión: 1.0.0
 
 import tkinter as tk
 from tkinter import ttk, messagebox
+import argparse
+import sys
+import json
 import json
 from datetime import datetime
 from typing import Dict, List, Any, Optional, Union, Tuple
@@ -71,27 +73,15 @@ class RouterManagerApp:
             'vrfs': [],
             'routing_protocols': {
                 'ospf': {
-                    'enabled': False, 
+                    'enabled': False,
                     'process_id': '1',
                     'networks': [],
                     'config': ''
                 },
-                'eigrp': {
-                    'enabled': False, 
-                    'as_number': '100',
-                    'networks': [],
-                    'config': ''
-                },
                 'bgp': {
-                    'enabled': False, 
+                    'enabled': False,
                     'as_number': '65000',
                     'neighbors': [],
-                    'config': ''
-                },
-                'rip': {
-                    'enabled': False, 
-                    'version': '2',
-                    'networks': [],
                     'config': ''
                 }
             },
@@ -247,7 +237,7 @@ class RouterManagerApp:
         menu_items: List[Tuple[str, str, str]] = [
             ("📊", "Dashboard", "dashboard"),
             ("🌐", "Configuración de Interfaces", "interfaces"),
-            ("🔀", "Protocolos de Enrutamiento", "routing"),
+            ("🔀", "Enrutamiento", "routing"),
             ("📈", "Monitoreo", "monitoring"),
             ("💻", "Interfaz de Comandos", "commands")
         ]
@@ -448,7 +438,7 @@ class RouterManagerApp:
         section_titles: Dict[str, str] = {
             "dashboard": "Dashboard",
             "interfaces": "Configuración de Interfaces",
-            "routing": "Protocolos de Enrutamiento",
+            "routing": "Enrutamiento",
             "monitoring": "Monitoreo",
             "commands": "Interfaz de Comandos"
         }
@@ -550,22 +540,80 @@ class RouterManagerApp:
             if hasattr(dashboard_frame, 'update_dashboard_data'):
                 dashboard_frame.update_dashboard_data()
 
+        # Resincronizar switches de protocolos si el frame existe
+        if "routing" in self.content_frames:
+            routing_frame = self.content_frames["routing"]
+            if hasattr(routing_frame, 'resync_protocol_states'):
+                routing_frame.resync_protocol_states()
+
 def main() -> None:
     """Función principal de la aplicación Router Manager.
     
-    Muestra el diálogo de autenticación para conectarse al router,
-    procesa los datos de conexión y lanza la aplicación principal.
-    Si el usuario cancela la conexión, la aplicación termina.
+    Modo GUI por defecto. Usa --cli para un modo consola con progreso.
     """
-    # Mostrar diálogo de autenticación
+    parser = argparse.ArgumentParser(description="Router Manager")
+    parser.add_argument("--cli", action="store_true", help="Ejecutar en modo consola (sin GUI)")
+    parser.add_argument("--protocol", choices=["SSH2", "Telnet", "Serial"], default="SSH2")
+    parser.add_argument("--hostname", default="")
+    parser.add_argument("--port", default="")
+    parser.add_argument("--username", default="")
+    parser.add_argument("--password", default="")
+    parser.add_argument("--enable-password", dest="enable_password", default="")
+    parser.add_argument("--vendor", dest="vendor_hint", choices=["Auto", "Huawei", "Cisco", "Juniper"], default="Auto")
+    parser.add_argument("--fast", dest="fast_mode", action="store_true", help="Acelerar análisis (fast_mode)")
+    parser.add_argument("--baudrate", type=int, default=9600, help="Baudrate para Serial")
+    parser.add_argument("--verbose", action="store_true", help="Mostrar salida parseada y resumen en consola")
+
+    args = parser.parse_args()
+
+    # Si se solicita modo CLI, ejecutar análisis desde consola
+    if args.cli:
+        from modules.router_analyzer import RouterAnalyzer
+        # Construir datos de conexión
+        connection_data = {
+            "protocol": args.protocol,
+            "hostname": args.hostname if args.protocol != "Serial" else "",
+            "port": args.port if args.protocol != "Serial" else (args.port or "COM7"),
+            "username": args.username,
+            "password": args.password,
+            "enable_password": args.enable_password,
+            "fast_mode": args.fast_mode,
+            "vendor_hint": args.vendor_hint,
+            "baudrate": args.baudrate if args.protocol == "Serial" else "",
+        }
+        print(f"[CLI] Conectando via {connection_data['protocol']}…")
+        target = connection_data.get("hostname") or connection_data.get("port")
+        print(f"[CLI] Destino: {target}")
+        analyzer = RouterAnalyzer(connection_data)
+        if not analyzer.connect():
+            print("[CLI] Error: no se pudo conectar.")
+            sys.exit(1)
+        print("[CLI] Conectado. Detectando y ejecutando comandos…")
+        analysis_data = analyzer.analyze_router()
+        print(f"[CLI] Fabricante: {analysis_data.get('vendor')}")
+        print(f"[CLI] Comandos ejecutados: {', '.join(analysis_data.get('commands_executed', []))}")
+        parsed_data = analyzer.parse_analysis_data(analysis_data)
+        di = parsed_data.get("device_info", {})
+        print(f"[CLI] Modelo: {di.get('model','N/A')} | Firmware: {di.get('firmware','N/A')} | Arquitectura: {di.get('architecture','N/A')}")
+        print(f"[CLI] Interfaces detectadas: {len(parsed_data.get('interfaces', []))}")
+        if args.verbose:
+            try:
+                print("[CLI] Resumen parseado:")
+                print(json.dumps(parsed_data, indent=2, ensure_ascii=False))
+            except Exception:
+                pass
+        print("[CLI] Análisis completado.")
+        return
+
+    # Modo GUI (por defecto)
     auth_dialog = AuthDialog()
     connection_data = auth_dialog.show()
-    
+
     # Si se canceló la conexión, salir
     if connection_data is None:
         print("Conexión cancelada por el usuario")
         return
-    
+
     # Iniciar aplicación principal
     app = RouterManagerApp(connection_data)
 

@@ -6,6 +6,15 @@ class InterfaceConfigFrame(tk.Frame):
     def __init__(self, parent, shared_data):
         super().__init__(parent, bg='#ffffff')
         self.shared_data = shared_data
+        # Configuración responsive: porcentajes por columna de la tabla
+        self._column_percentages = {
+            'Interfaz': 0.20,
+            'Tipo': 0.15,
+            'IP': 0.22,
+            'Máscara': 0.15,
+            'Estado': 0.10,
+            'Descripción': 0.18
+        }
         
         # Inicializar datos de interfaces si no existen
         if 'interfaces' not in self.shared_data or not self.shared_data['interfaces']:
@@ -71,58 +80,61 @@ class InterfaceConfigFrame(tk.Frame):
         
     def create_widgets(self):
         """Crear los widgets de configuración de interfaces"""
-        # Título
+        # Título (centrado)
         title_frame = tk.Frame(self, bg='#ffffff')
-        title_frame.pack(fill=tk.X, pady=(0, 20))
-        
+        title_frame.pack(anchor='n', fill=tk.X, pady=(0, 10))
+
         title_label = tk.Label(title_frame,
-                              text="Configuración de Interfaces",
-                              font=("Arial", 20, "bold"),
-                              bg='#ffffff',
-                              fg='#030213')
-        title_label.pack(anchor=tk.W)
-        
+                               text="Configuración de Interfaces",
+                               font=("Arial", 20, "bold"),
+                               bg='#ffffff',
+                               fg='#030213')
+        title_label.pack(anchor=tk.CENTER)
+
         subtitle_label = tk.Label(title_frame,
-                                 text="Administra las interfaces de red del router",
-                                 font=("Arial", 12),
-                                 bg='#ffffff',
-                                 fg='#666666')
-        subtitle_label.pack(anchor=tk.W, pady=(5, 0))
-        
-        # Frame principal con scroll
-        main_canvas = tk.Canvas(self, bg='#ffffff')
+                                  text="Administra las interfaces de red del router",
+                                  font=("Arial", 12),
+                                  bg='#ffffff',
+                                  fg='#666666')
+        subtitle_label.pack(anchor=tk.CENTER, pady=(5, 0))
+
+        # Frame principal con scroll y contenedor centrado
+        main_canvas = tk.Canvas(self, bg='#ffffff', highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
         scrollable_frame = tk.Frame(main_canvas, bg='#ffffff')
-        
+        # Actualizar región de scroll cuando cambie el tamaño del contenido
         scrollable_frame.bind(
             "<Configure>",
             lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
         )
-        
-        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        self._canvas_window = main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         main_canvas.configure(yscrollcommand=scrollbar.set)
-        
+
+        # Contenedor de contenido centrado
+        content_frame = tk.Frame(scrollable_frame, bg='#ffffff')
+        content_frame.pack(anchor='n', fill=tk.X)
+
         # Estadísticas de interfaces
-        self.create_interface_stats(scrollable_frame)
-        
+        self.create_interface_stats(content_frame)
+
         # Lista de interfaces
-        self.create_interface_list(scrollable_frame)
-        
+        self.create_interface_list(content_frame)
+
         # Vista previa de comandos
-        self.create_command_preview(scrollable_frame)
-        
+        self.create_command_preview(content_frame)
+
         # Configurar scroll
         def _on_mousewheel(event):
             main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
         main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
+
         main_canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
         
     def create_interface_stats(self, parent):
         """Crear estadísticas de interfaces"""
         stats_frame = tk.Frame(parent, bg='#ffffff')
-        stats_frame.pack(fill=tk.X, pady=(0, 20))
+        stats_frame.pack(anchor='n', fill=tk.X, pady=(0, 10))
         
         # Calcular estadísticas
         interfaces = self.shared_data.get('interfaces', [])
@@ -146,7 +158,7 @@ class InterfaceConfigFrame(tk.Frame):
         
         for i, (title, value, color) in enumerate(stats):
             card = self.create_stat_card(stats_frame, title, value, color)
-            card.grid(row=0, column=i, padx=5, pady=5, sticky="ew")
+            card.grid(row=0, column=i, padx=8, pady=8, sticky="ew")
             
     def create_stat_card(self, parent, title, value, color):
         """Crear tarjeta de estadística"""
@@ -167,11 +179,11 @@ class InterfaceConfigFrame(tk.Frame):
     def create_interface_list(self, parent):
         """Crear lista de interfaces"""
         list_frame = tk.Frame(parent, bg='#ffffff')
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        list_frame.pack(anchor='n', fill=tk.X, pady=(0, 10))
         
         # Título y botón de agregar
         header_frame = tk.Frame(list_frame, bg='#ffffff')
-        header_frame.pack(fill=tk.X, pady=(0, 10))
+        header_frame.pack(anchor='n', fill=tk.X, pady=(0, 8))
         
         title_label = tk.Label(header_frame,
                               text="🌐 Lista de Interfaces",
@@ -182,16 +194,29 @@ class InterfaceConfigFrame(tk.Frame):
         
         # Frame para la tabla
         table_frame = tk.Frame(list_frame, bg='white', relief=tk.SOLID, borderwidth=1)
-        table_frame.pack(fill=tk.BOTH, expand=True)
+        table_frame.pack(anchor='n', fill=tk.BOTH, expand=True)
         
         # Crear Treeview
         columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Descripción')
         self.interface_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=10)
         
-        # Configurar columnas
+        # Configurar columnas (responsive por porcentaje)
         for col in columns:
             self.interface_tree.heading(col, text=col)
-            self.interface_tree.column(col, width=120)
+            self.interface_tree.column(col, anchor='center', stretch=True)
+
+        # Redimensionar columnas por porcentaje cuando cambie el tamaño del Treeview
+        self._columns = columns
+        def _resize_tree_columns(total_width):
+            try:
+                available = max(0, total_width - 20)  # espacio para bordes/scrollbar
+                for col in self._columns:
+                    pct = self._column_percentages.get(col, 1/len(self._columns))
+                    w = max(60, int(available * pct))
+                    self.interface_tree.column(col, width=w)
+            except Exception:
+                pass
+        self.interface_tree.bind('<Configure>', lambda e: _resize_tree_columns(e.width))
         
         # Scrollbar
         tree_scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=self.interface_tree.yview)
@@ -199,15 +224,15 @@ class InterfaceConfigFrame(tk.Frame):
         
         # Botones de acción
         button_frame = tk.Frame(table_frame, bg='white')
-        button_frame.pack(fill=tk.X, padx=10, pady=10)
+        button_frame.pack(anchor='n', fill=tk.X, pady=8)
         
         edit_btn = tk.Button(button_frame, text="✏️ Editar", command=self.edit_interface,
                             bg='#007bff', fg='white', font=("Arial", 10))
-        edit_btn.pack(side=tk.LEFT, padx=(0, 10))
+        edit_btn.pack(side=tk.LEFT, padx=8)
         
         toggle_btn = tk.Button(button_frame, text="🔄 Cambiar Estado", command=self.toggle_interface,
                               bg='#28a745', fg='white', font=("Arial", 10))
-        toggle_btn.pack(side=tk.LEFT)
+        toggle_btn.pack(side=tk.LEFT, padx=8)
         
         # Empaquetar
         self.interface_tree.pack(side='left', fill='both', expand=True)
@@ -386,30 +411,30 @@ class InterfaceConfigFrame(tk.Frame):
     def create_command_preview(self, parent):
         """Crear vista previa de comandos"""
         preview_frame = tk.Frame(parent, bg='#ffffff')
-        preview_frame.pack(fill=tk.X, pady=(20, 0))
+        preview_frame.pack(anchor='n', fill=tk.X, pady=(10, 0))
         
         title_label = tk.Label(preview_frame,
                               text="💻 Comandos de Configuración",
                               font=("Arial", 16, "bold"),
                               bg='#ffffff',
                               fg='#030213')
-        title_label.pack(anchor=tk.W, pady=(0, 10))
+        title_label.pack(anchor=tk.CENTER, pady=(0, 10))
         
         subtitle_label = tk.Label(preview_frame,
                                  text="Vista previa de los comandos que se ejecutarán en el router",
                                  font=("Arial", 12),
                                  bg='#ffffff',
                                  fg='#666666')
-        subtitle_label.pack(anchor=tk.W, pady=(0, 15))
+        subtitle_label.pack(anchor=tk.CENTER, pady=(0, 10))
         
         # Terminal frame
         terminal_frame = tk.Frame(preview_frame, bg='black')
-        terminal_frame.pack(fill=tk.X)
+        terminal_frame.pack(anchor='n', fill=tk.X, pady=(0, 8))
         
         # Texto del terminal
         terminal_text = tk.Text(terminal_frame, bg='black', fg='#00ff00',
-                               font=("Consolas", 10), height=15, wrap=tk.WORD)
-        terminal_text.pack(fill=tk.X, padx=5, pady=5)
+                                font=("Consolas", 10), height=15, wrap=tk.WORD)
+        terminal_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
         # Generar comandos
         commands = ["# Configuración de interfaces activas"]

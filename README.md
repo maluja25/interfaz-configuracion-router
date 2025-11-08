@@ -49,7 +49,7 @@ python main.py
 ### Características principales
 - ✅ Interfaz gráfica intuitiva con tkinter
 - 🌐 Configuración de interfaces de red
-- 🔀 Gestión de protocolos de enrutamiento (OSPF, BGP)
+- 🔀 Gestión de enrutamiento (OSPF, BGP)
 - 📚 Configuración de VRF (Virtual Routing and Forwarding)
 - 📈 Monitoreo en tiempo real
 - 💻 Interfaz de comandos integrada
@@ -62,7 +62,7 @@ python main.py
 │   ├── auth_dialog.py      # Diálogo de autenticación
 │   ├── dashboard.py        # Panel principal
 │   ├── interface_config.py # Configuración de interfaces
-│   ├── routing_config.py   # Protocolos de enrutamiento
+│   ├── routing_config.py   # Enrutamiento
 │   ├── monitoring.py       # Monitoreo del sistema
 │   └── command_interface.py # Interfaz de comandos
 ├── requirements.txt        # Dependencias del proyecto
