@@ -21,7 +21,6 @@ from modules.auth_dialog import AuthDialog
 from modules.dashboard import DashboardFrame
 from modules.interface_config import InterfaceConfigFrame
 from modules.routing_config import RoutingConfigFrame
-from modules.vrf_config import VRFConfigFrame
 from modules.monitoring import MonitoringFrame
 from modules.command_interface import CommandInterfaceFrame
 
@@ -103,9 +102,17 @@ class RouterManagerApp:
         }
         
         # Cargar datos del análisis si están disponibles
-        if connection_data and 'parsed_data' in connection_data:
-            self.shared_data.update(connection_data['parsed_data'])
-            self.shared_data['analysis_data'] = connection_data.get('analysis_data', {})
+        if connection_data:
+            # Cargar análisis crudo para la sección "Información del Análisis"
+            if 'analysis_data' in connection_data:
+                self.shared_data['analysis_data'] = connection_data.get('analysis_data', {})
+            # Cargar datos parseados y propagar claves usadas por módulos
+            if 'parsed_data' in connection_data:
+                self.shared_data['parsed_data'] = connection_data['parsed_data']
+                self.shared_data['interfaces'] = connection_data['parsed_data'].get('interfaces', [])
+                self.shared_data['vrfs'] = connection_data['parsed_data'].get('vrfs', [])
+                self.shared_data['routing_protocols'] = connection_data['parsed_data'].get('routing_protocols', self.shared_data['routing_protocols'])
+                self.shared_data['static_routes'] = connection_data['parsed_data'].get('static_routes', [])
         
         # Configurar estilos
         self.setup_styles()
@@ -241,7 +248,6 @@ class RouterManagerApp:
             ("📊", "Dashboard", "dashboard"),
             ("🌐", "Configuración de Interfaces", "interfaces"),
             ("🔀", "Protocolos de Enrutamiento", "routing"),
-            ("📚", "VRF", "vrf"),
             ("📈", "Monitoreo", "monitoring"),
             ("💻", "Interfaz de Comandos", "commands")
         ]
@@ -408,11 +414,7 @@ class RouterManagerApp:
             self.shared_data
         )
         
-        # VRF - Virtual Routing and Forwarding
-        self.content_frames["vrf"] = VRFConfigFrame(
-            self.content_container, 
-            self.shared_data
-        )
+        # VRF eliminado
         
         # Monitoreo - Estadísticas y estado del router
         self.content_frames["monitoring"] = MonitoringFrame(
@@ -447,7 +449,6 @@ class RouterManagerApp:
             "dashboard": "Dashboard",
             "interfaces": "Configuración de Interfaces",
             "routing": "Protocolos de Enrutamiento",
-            "vrf": "VRF",
             "monitoring": "Monitoreo",
             "commands": "Interfaz de Comandos"
         }
@@ -524,6 +525,31 @@ class RouterManagerApp:
         if messagebox.askokcancel(EXIT_TITLE, EXIT_MESSAGE):
             self.root.destroy()
 
+    def on_connection_success(self, parsed_data: Dict[str, Any]):
+        """Maneja el éxito de la conexión y actualiza la UI."""
+        self.shared_data['parsed_data'] = parsed_data
+
+        # Propagar datos clave a nivel superior para que los módulos de UI los usen
+        if isinstance(parsed_data, dict):
+            # Interfaces
+            if 'interfaces' in parsed_data:
+                self.shared_data['interfaces'] = parsed_data.get('interfaces', [])
+            # VRFs
+            if 'vrfs' in parsed_data:
+                self.shared_data['vrfs'] = parsed_data.get('vrfs', [])
+            # Protocolos
+            if 'routing_protocols' in parsed_data:
+                self.shared_data['routing_protocols'] = parsed_data.get('routing_protocols', self.shared_data['routing_protocols'])
+            # Rutas estáticas
+            if 'static_routes' in parsed_data:
+                self.shared_data['static_routes'] = parsed_data.get('static_routes', [])
+        
+        # Actualizar el dashboard
+        if "dashboard" in self.content_frames:
+            dashboard_frame = self.content_frames["dashboard"]
+            if hasattr(dashboard_frame, 'update_dashboard_data'):
+                dashboard_frame.update_dashboard_data()
+
 def main() -> None:
     """Función principal de la aplicación Router Manager.
     
@@ -540,16 +566,38 @@ def main() -> None:
         print("Conexión cancelada por el usuario")
         return
     
-    # Mostrar información de conexión en consola
-    hostname = connection_data.get('hostname', '192.168.1.1')
-    protocol = connection_data.get('protocol', 'SSH')
-    username = connection_data.get('username', 'N/A')
-    
-    print(f"Conectando a {hostname} via {protocol}")
-    print(f"Usuario: {username}")
-    
-    # Iniciar aplicación principal con los datos de conexión
+    # Iniciar aplicación principal
     app = RouterManagerApp(connection_data)
+
+    # Reutilizar el análisis ya realizado en el diálogo de autenticación.
+    # Evita ejecutar un segundo análisis.
+    try:
+        target = connection_data.get('hostname') or connection_data.get('port')
+        messagebox.showinfo("Conexión exitosa", f"Conectado a {target} via {connection_data.get('protocol')}")
+    except:
+        pass
+
+    # Si el análisis ya está disponible, actualizar la UI con esos datos.
+    if 'parsed_data' in connection_data:
+        app.on_connection_success(connection_data['parsed_data'])
+    else:
+        # Fallback: solo si por alguna razón no se obtuvo análisis, ejecutar uno.
+        try:
+            from modules.router_analyzer import RouterAnalyzer
+            analyzer = RouterAnalyzer(connection_data)
+            if analyzer.connect():
+                analysis_data = analyzer.analyze_router()
+                parsed_data = analyzer.parse_analysis_data(analysis_data)
+                # Guardar en connection_data por consistencia
+                connection_data['analysis_data'] = analysis_data
+                connection_data['parsed_data'] = parsed_data
+                app.on_connection_success(parsed_data)
+            else:
+                messagebox.showerror("Error de Conexión", "No se pudo conectar al router.")
+        except Exception as e:
+            messagebox.showerror("Error de Análisis", f"No se pudo analizar el router: {e}")
+
+    # Iniciar la aplicación
     app.run()
 
 if __name__ == "__main__":

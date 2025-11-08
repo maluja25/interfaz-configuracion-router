@@ -134,32 +134,41 @@ class AuthDialog:
         
         # Protocolo
         protocol_frame = tk.Frame(row1_frame, bg='white')
-        protocol_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        protocol_frame.pack(side=tk.LEFT, padx=(0, 20))
         
-        tk.Label(protocol_frame, text="Protocolo:", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
+        protocol_label = tk.Label(protocol_frame, text="Protocolo:", bg='white', anchor=tk.W)
+        protocol_label.pack(side=tk.LEFT, padx=(0, 10))
+        
         self.protocol_var = tk.StringVar(value="SSH2")
-        protocol_combo = ttk.Combobox(protocol_frame, textvariable=self.protocol_var, 
-                                     values=["SSH2", "Telnet"], state="readonly", width=15)
-        protocol_combo.pack(anchor=tk.W, pady=(2, 0))
-        protocol_combo.bind('<<ComboboxSelected>>', self.on_protocol_change)
+        protocol_cb = ttk.Combobox(protocol_frame, textvariable=self.protocol_var, 
+                                   values=["SSH2", "Telnet", "Serial"], state="readonly", width=10)
+        protocol_cb.pack(side=tk.LEFT)
+        protocol_cb.bind("<<ComboboxSelected>>", self.on_protocol_change)
         
+        # Puerto (para Serial)
+        self.serial_port_label = tk.Label(protocol_frame, text="Puerto:", bg='white', anchor=tk.W)
+        self.serial_port_var = tk.StringVar(value="COM7")
+        self.serial_port_entry = tk.Entry(protocol_frame, textvariable=self.serial_port_var, width=10)
+
         # Hostname
-        hostname_frame = tk.Frame(row1_frame, bg='white')
-        hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
+        self.hostname_frame = tk.Frame(row1_frame, bg='white')
+        self.hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
-        tk.Label(hostname_frame, text="Hostname:", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
+        self.hostname_label = tk.Label(self.hostname_frame, text="Hostname:", font=("Arial", 10, "bold"), bg='white')
+        self.hostname_label.pack(anchor=tk.W)
         self.hostname_var = tk.StringVar(value="192.168.1.1")
-        hostname_entry = ttk.Entry(hostname_frame, textvariable=self.hostname_var, width=20)
-        hostname_entry.pack(anchor=tk.W, pady=(2, 0))
+        self.hostname_entry = ttk.Entry(self.hostname_frame, textvariable=self.hostname_var, width=20)
+        self.hostname_entry.pack(anchor=tk.W, pady=(2, 0))
         
         # Segunda fila: Puerto
-        port_frame = tk.Frame(main_config_frame, bg='white')
-        port_frame.pack(fill=tk.X, pady=(0, 10))
+        self.port_frame = tk.Frame(main_config_frame, bg='white')
+        self.port_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(port_frame, text="Puerto:", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
+        self.net_port_label = tk.Label(self.port_frame, text="Puerto:", font=("Arial", 10, "bold"), bg='white')
+        self.net_port_label.pack(anchor=tk.W)
         self.port_var = tk.StringVar(value="22")
-        port_entry = ttk.Entry(port_frame, textvariable=self.port_var, width=10)
-        port_entry.pack(anchor=tk.W, pady=(2, 0))
+        self.net_port_entry = ttk.Entry(self.port_frame, textvariable=self.port_var, width=10)
+        self.net_port_entry.pack(anchor=tk.W, pady=(2, 0))
         
         # Credenciales
         cred_frame = tk.Frame(main_config_frame, bg='white')
@@ -171,7 +180,7 @@ class AuthDialog:
         cred_options_frame = tk.Frame(cred_frame, bg='white')
         cred_options_frame.pack(fill=tk.X, pady=(5, 0))
         
-        # Usuario
+        # Usuario y contraseña
         user_frame = tk.Frame(cred_options_frame, bg='white')
         user_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 20))
         
@@ -183,6 +192,11 @@ class AuthDialog:
         self.username_var = tk.StringVar()
         username_entry = ttk.Entry(user_frame, textvariable=self.username_var, width=18)
         username_entry.pack(anchor=tk.W, pady=(2, 0))
+
+        tk.Label(user_frame, text="Contraseña:", bg='white').pack(anchor=tk.W, pady=(8, 0))
+        self.password_var = tk.StringVar()
+        self.password_entry = ttk.Entry(user_frame, textvariable=self.password_var, width=18, show='*')
+        self.password_entry.pack(anchor=tk.W, pady=(2, 0))
         
         # Credenciales guardadas
         saved_frame = tk.Frame(cred_options_frame, bg='white')
@@ -279,9 +293,35 @@ class AuthDialog:
         protocol = self.protocol_var.get()
         if protocol == "SSH2":
             self.port_var.set("22")
+            # Ocultar controles de puerto serial
+            self.serial_port_label.pack_forget()
+            self.serial_port_entry.pack_forget()
+            # Mostrar campo de hostname y puerto de red
+            if not self.port_frame.winfo_ismapped():
+                self.port_frame.pack(fill=tk.X, pady=(0, 10))
+            if not self.hostname_frame.winfo_ismapped():
+                self.hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         elif protocol == "Telnet":
             self.port_var.set("23")
-    
+            # Ocultar controles de puerto serial
+            self.serial_port_label.pack_forget()
+            self.serial_port_entry.pack_forget()
+            # Mostrar campo de hostname y puerto de red
+            if not self.port_frame.winfo_ismapped():
+                self.port_frame.pack(fill=tk.X, pady=(0, 10))
+            if not self.hostname_frame.winfo_ismapped():
+                self.hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        elif protocol == "Serial":
+            self.serial_port_var.set("COM7")
+            # Mostrar controles de puerto serial
+            self.serial_port_label.pack(side=tk.LEFT, padx=(10, 5))
+            self.serial_port_entry.pack(side=tk.LEFT)
+            # Ocultar campo de hostname y puerto de red
+            if self.port_frame.winfo_ismapped():
+                self.port_frame.pack_forget()
+            if self.hostname_frame.winfo_ismapped():
+                self.hostname_frame.pack_forget()
+
     def toggle_credentials(self):
         """Alternar entre usuario y credenciales guardadas"""
         if self.use_username.get():
@@ -312,6 +352,7 @@ class AuthDialog:
             'port': self.port_var.get(),
             'protocol': self.protocol_var.get(),
             'username': self.username_var.get(),
+            'password': self.password_var.get(),
             'auth_methods': {k: v.get() for k, v in self.auth_methods.items()}
         }
         
@@ -327,13 +368,23 @@ class AuthDialog:
     def connect(self):
         """Establecer conexión y analizar router"""
         # Validar campos requeridos
-        if not self.hostname_var.get():
-            messagebox.showerror("Error", "Por favor ingresa el hostname")
-            return
+        protocol = self.protocol_var.get()
+        if protocol == "Serial":
+            if not self.serial_port_var.get():
+                messagebox.showerror("Error", "Por favor ingresa el puerto serial (ej. COM7)")
+                return
+        else:
+            if not self.hostname_var.get():
+                messagebox.showerror("Error", "Por favor ingresa el hostname")
+                return
             
-        if self.use_username.get() and not self.username_var.get():
-            messagebox.showerror("Error", "Por favor ingresa el nombre de usuario")
-            return
+        if self.use_username.get():
+            if not self.username_var.get():
+                messagebox.showerror("Error", "Por favor ingresa el nombre de usuario")
+                return
+            if not self.password_var.get():
+                messagebox.showerror("Error", "Por favor ingresa la contraseña")
+                return
             
         if not self.use_username.get() and not self.saved_creds_var.get():
             messagebox.showerror("Error", "Por favor selecciona credenciales guardadas")
@@ -341,11 +392,12 @@ class AuthDialog:
             
         # Preparar datos de conexión
         self.connection_data = {
-            'protocol': self.protocol_var.get(),
-            'hostname': self.hostname_var.get(),
-            'port': self.port_var.get(),
+            'protocol': protocol,
+            'hostname': self.hostname_var.get() if protocol != "Serial" else "",
+            'port': self.serial_port_var.get() if protocol == "Serial" else self.port_var.get(),
             'use_username': self.use_username.get(),
             'username': self.username_var.get(),
+            'password': self.password_var.get() if self.use_username.get() else '',
             'saved_credentials': self.saved_creds_var.get(),
             'auth_methods': {k: v.get() for k, v in self.auth_methods.items()},
             'session_options': {k: v.get() for k, v in self.session_options.items()}
@@ -390,8 +442,9 @@ class AuthDialog:
         title_label.pack(pady=(0, 20))
         
         # Información de conexión
+        target_info = self.connection_data['hostname'] if self.connection_data['protocol'] != 'Serial' else self.connection_data['port']
         info_label = tk.Label(main_frame,
-                             text=f"Conectando a {self.connection_data['hostname']} via {self.connection_data['protocol']}",
+                             text=f"Conectando a {target_info} via {self.connection_data['protocol']}",
                              font=("Arial", 10),
                              bg='#f8f9fa',
                              fg='#666666')
@@ -483,19 +536,33 @@ class AuthDialog:
                 self.connection_data['analysis_data'] = analysis_data
                 self.connection_data['parsed_data'] = parsed_data
                 
-                # Cerrar ventana de análisis después de 3 segundos
-                window.after(3000, lambda: self.close_analysis_window(window))
+                # Detener la barra de progreso antes de cerrar la ventana
+                try:
+                    progress_bar.stop()
+                except Exception:
+                    pass
+                
+                # Cerrar ventana de análisis después de 1 segundo
+                window.after(1000, lambda: self.close_analysis_window(window))
                 
             else:
                 listbox.insert(tk.END, "❌ Error al conectar al router")
                 window.update()
                 time.sleep(2)
+                try:
+                    progress_bar.stop()
+                except Exception:
+                    pass
                 window.after(2000, lambda: self.close_analysis_window(window))
                 
         except Exception as e:
             listbox.insert(tk.END, f"❌ Error: {str(e)}")
             window.update()
             time.sleep(2)
+            try:
+                progress_bar.stop()
+            except Exception:
+                pass
             window.after(2000, lambda: self.close_analysis_window(window))
     
     def close_analysis_window(self, window):

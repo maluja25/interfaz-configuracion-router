@@ -7,6 +7,9 @@ paramiko>=2.8.0
 # Para conexiones Telnet (opcional, ya que telnetlib3 está instalado)
 telnetlib3>=2.0.0
 
+# Para conexiones Serial (requiere pyserial)
+pyserial>=3.5
+
 # Dependencias estándar de Python (ya incluidas)
 # tkinter - Interfaz gráfica (incluida en Python)
 # json - Manejo de JSON (incluida en Python)

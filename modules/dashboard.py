@@ -7,32 +7,44 @@ class DashboardFrame(tk.Frame):
         super().__init__(parent, bg='#ffffff')
         self.shared_data = shared_data
         
-        # Datos del dispositivo
+        # Datos del dispositivo (se actualizarán desde shared_data)
+        self.device_info = {}
+        
+        # Estadísticas de red (se actualizarán desde shared_data)
+        self.network_stats = {}
+        
+        # Estado de interfaces (se actualizarán desde shared_data)
+        self.interface_status = []
+        
+        self.create_widgets()
+        self.update_dashboard_data()  # Cargar datos iniciales
+        
+    def update_dashboard_data(self):
+        """Actualizar los datos del dashboard desde shared_data"""
+        parsed_data = self.shared_data.get('parsed_data', {})
+        
+        # Actualizar información del dispositivo
         self.device_info = {
-            "model": "Cisco ISR4331",
-            "firmware": "IOS XE 16.09.04",
-            "uptime": "15 días, 4 horas",
-            "serial": "FDO24280234"
+            "model": parsed_data.get('device_info', {}).get('model', 'N/A'),
+            "firmware": parsed_data.get('device_info', {}).get('firmware', 'N/A'),
+            "uptime": parsed_data.get('device_info', {}).get('uptime', 'N/A'),
+            "serial": parsed_data.get('device_info', {}).get('serial', 'N/A')
         }
         
-        # Estadísticas de red
+        # Actualizar estadísticas de red
         self.network_stats = {
-            "active_connections": 45,
-            "wired_connections": 45,
-            "wireless_connections": 0,
-            "total_bandwidth": "1 Gbps",
-            "current_usage": "245 Mbps"
+            "active_connections": len(parsed_data.get('neighbors', {}).get('bgp', [])) + len(parsed_data.get('neighbors', {}).get('ospf', [])),
+            "cpu_usage": parsed_data.get('cpu_usage', 'N/A'),
+            "memory_usage": parsed_data.get('memory_usage', 'N/A'),
+            "storage_usage": parsed_data.get('storage_usage', 'N/A')
         }
         
-        # Estado de interfaces
-        self.interface_status = [
-            {"name": "GigabitEthernet0/0/1", "type": "Ethernet", "status": "Activa", "ip": "192.168.1.1", "speed": "1 Gbps"},
-            {"name": "GigabitEthernet0/0/2", "type": "Ethernet", "status": "Activa", "ip": "10.0.0.1", "speed": "1 Gbps"},
-            {"name": "Serial0/1/0", "type": "Serial", "status": "Activa", "ip": "203.0.113.2", "speed": "1544 Kbps"},
-            {"name": "GigabitEthernet0/0/3", "type": "Ethernet", "status": "Inactiva", "ip": "N/A", "speed": "1 Gbps"},
-            {"name": "Loopback0", "type": "Loopback", "status": "Activa", "ip": "1.1.1.1", "speed": "N/A"}
-        ]
+        # Actualizar estado de interfaces
+        self.interface_status = parsed_data.get('interfaces', [])
         
+        # Volver a crear los widgets para reflejar los nuevos datos
+        for widget in self.winfo_children():
+            widget.destroy()
         self.create_widgets()
         
     def create_widgets(self):
@@ -101,10 +113,10 @@ class DashboardFrame(tk.Frame):
         
         # Estadísticas
         stats = [
-            ("📊 CPU", "45%", "Uso actual del procesador"),
-            ("💾 Memoria", "78%", "Memoria RAM utilizada"),
-            ("💽 Almacenamiento", "34%", "Espacio usado en flash"),
-            ("🌐 Conexiones", str(self.network_stats["active_connections"]), "Conexiones activas")
+            ("📊 CPU", self.network_stats.get("cpu_usage", "0%"), "Uso actual del procesador"),
+            ("💾 Memoria", self.network_stats.get("memory_usage", "0%"), "Memoria RAM utilizada"),
+            ("💽 Almacenamiento", self.network_stats.get("storage_usage", "0%"), "Espacio usado en flash"),
+            ("🌐 Conexiones", str(self.network_stats.get("active_connections", 0)), "Conexiones activas")
         ]
         
         for i, (title, value, description) in enumerate(stats):
@@ -162,10 +174,10 @@ class DashboardFrame(tk.Frame):
         info_title.pack(pady=(15, 10))
         
         info_items = [
-            ("Modelo:", self.device_info["model"]),
-            ("Firmware:", self.device_info["firmware"]),
-            ("Tiempo activo:", self.device_info["uptime"]),
-            ("Número de serie:", self.device_info["serial"])
+            ("Modelo:", self.device_info.get("model", "N/A")),
+            ("Firmware:", self.device_info.get("firmware", "N/A")),
+            ("Tiempo activo:", self.device_info.get("uptime", "N/A")),
+            ("Número de serie:", self.device_info.get("serial", "N/A"))
         ]
         
         for label, value in info_items:
@@ -188,13 +200,17 @@ class DashboardFrame(tk.Frame):
                               fg='#030213')
         specs_title.pack(pady=(15, 10))
         
+        # Obtener parsed_data de shared_data
+        parsed_data = self.shared_data.get('parsed_data', {})
+        device_info = parsed_data.get('device_info', {})
+        
         specs_items = [
-            ("Arquitectura:", "x86_64"),
-            ("Memoria:", "4 GB DDR4"),
-            ("Almacenamiento:", "8 GB eUSB"),
-            ("Puertos Ethernet:", "3x Gigabit"),
-            ("Ranuras WIC:", "2x WIC/VWIC/HWIC"),
-            ("Protocolo:", "IPv4/IPv6")
+            ("Arquitectura:", device_info.get('architecture', 'N/A')),
+            ("Memoria RAM:", device_info.get('ram_memory', 'N/A')),
+            ("Memoria Flash:", device_info.get('flash_memory', 'N/A')),
+            ("Puertos Ethernet:", device_info.get('ethernet_ports', 'N/A')),
+            ("Ranuras WIC:", device_info.get('wic_slots', 'N/A')),
+            ("Protocolo:", device_info.get('protocols', 'N/A'))
         ]
         
         for label, value in specs_items:
@@ -244,29 +260,15 @@ class DashboardFrame(tk.Frame):
         tree.column('Protocolo', width=100)
         tree.column('Método', width=100)
         
-        # Obtener datos de interfaces del análisis
-        interfaces_data = self.shared_data.get('interfaces', [])
-        
-        if interfaces_data:
-            # Usar datos reales del análisis
-            for interface in interfaces_data:
-                tree.insert('', tk.END, values=(
-                    interface.get('name', 'N/A'),
-                    interface.get('ip_address', 'N/A'),
-                    interface.get('status', 'N/A'),
-                    interface.get('protocol', 'N/A'),
-                    interface.get('method', 'N/A')
-                ))
-        else:
-            # Usar datos de ejemplo si no hay análisis
-            for interface in self.interface_status:
-                tree.insert('', tk.END, values=(
-                    interface['name'],
-                    interface['ip'],
-                    interface['status'],
-                    'N/A',
-                    'N/A'
-                ))
+        # Insertar datos de las interfaces
+        for interface in self.interface_status:
+            tree.insert('', tk.END, values=(
+                interface.get('name', 'N/A'),
+                interface.get('ip_address', 'N/A'),
+                interface.get('status', 'N/A'),
+                interface.get('protocol', 'N/A'),
+                interface.get('method', 'N/A')
+            ))
         
         # Scrollbar para la tabla
         table_scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=tree.yview)
