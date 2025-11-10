@@ -1,5 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
+from tkinter import filedialog, messagebox
+from tkinter.scrolledtext import ScrolledText
 from datetime import datetime
 
 class DashboardFrame(tk.Frame):
@@ -54,7 +56,7 @@ class DashboardFrame(tk.Frame):
         title_frame.pack(fill=tk.X, pady=(0, 20))
         
         title_label = tk.Label(title_frame,
-                              text="Dashboard del Router",
+                              text="Información del Router",
                               font=("Arial", 20, "bold"),
                               bg='#ffffff',
                               fg='#030213')
@@ -67,17 +69,26 @@ class DashboardFrame(tk.Frame):
                                  fg='#666666')
         subtitle_label.pack(anchor=tk.W, pady=(5, 0))
         
-        # Frame principal con scroll
-        main_canvas = tk.Canvas(self, bg='#ffffff')
+        # Frame principal con scroll (ajustando el ancho al canvas para evitar espacios)
+        main_canvas = tk.Canvas(self, bg='#ffffff', highlightthickness=0)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
         scrollable_frame = tk.Frame(main_canvas, bg='#ffffff')
-        
-        scrollable_frame.bind(
-            "<Configure>",
-            lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
-        )
-        
-        main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        # Crear ventana para el frame desplazable y guardar su id
+        window_id = main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        # Ajustar el scrollregion y el ancho del contenido al ancho disponible del canvas
+        def _update_scrollregion(_evt=None):
+            main_canvas.configure(scrollregion=main_canvas.bbox("all"))
+        scrollable_frame.bind("<Configure>", _update_scrollregion)
+
+        def _resize_to_canvas(event):
+            try:
+                main_canvas.itemconfig(window_id, width=event.width)
+            except Exception:
+                pass
+        main_canvas.bind("<Configure>", _resize_to_canvas)
+
         main_canvas.configure(yscrollcommand=scrollbar.set)
         
         # Grid de estadísticas principales
@@ -86,18 +97,21 @@ class DashboardFrame(tk.Frame):
         # Información del dispositivo
         self.create_device_info(scrollable_frame)
         
-        # Estado de interfaces
-        self.create_interface_status(scrollable_frame)
+        # Estado de interfaces removido: esta funcionalidad está en el módulo de Configuración de Interfaces
         
-        # Información del análisis
-        self.create_analysis_info(scrollable_frame)
+        # Configuración del router
+        self.create_running_config_section(scrollable_frame)
         
-        # Configurar scroll con rueda del mouse
-        def _on_mousewheel(event):
-            main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        
+        # Reactivar desplazamiento con la rueda del mouse en el canvas principal
+        def _on_canvas_mousewheel(event):
+            try:
+                main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except Exception:
+                pass
+        main_canvas.bind_all("<MouseWheel>", _on_canvas_mousewheel)
+
         main_canvas.pack(side="left", fill="both", expand=True)
+        # Mostrar la barra de desplazamiento externa para navegación en pantallas pequeñas
         scrollbar.pack(side="right", fill="y")
         
     def create_stats_grid(self, parent):
@@ -278,71 +292,99 @@ class DashboardFrame(tk.Frame):
         tree.pack(side='left', fill='both', expand=True)
         table_scrollbar.pack(side='right', fill='y')
     
-    def create_analysis_info(self, parent):
-        """Crear sección de información del análisis"""
-        analysis_frame = tk.Frame(parent, bg='#ffffff')
-        analysis_frame.pack(fill=tk.X, pady=(30, 0))
-        
-        # Título
-        title_label = tk.Label(analysis_frame,
-                              text="📊 Información del Análisis",
-                              font=("Arial", 16, "bold"),
-                              bg='#ffffff',
-                              fg='#030213')
-        title_label.pack(anchor=tk.W, pady=(0, 15))
-        
-        # Frame para mostrar información del análisis
-        info_frame = tk.Frame(analysis_frame, bg='white', relief=tk.SOLID, borderwidth=1)
-        info_frame.pack(fill=tk.X)
-        
-        # Obtener datos del análisis
-        analysis_data = self.shared_data.get('analysis_data', {})
-        parsed_data = self.shared_data.get('parsed_data', {})
-        
-        if analysis_data:
-            # Mostrar información del análisis
-            info_text = f"Análisis realizado: {analysis_data.get('timestamp', 'N/A')}\n"
-            info_text += f"Hostname: {analysis_data.get('hostname', 'N/A')}\n"
-            info_text += f"Protocolo: {analysis_data.get('protocol', 'N/A')}\n"
-            info_text += f"Comandos ejecutados: {len(analysis_data.get('commands_executed', []))}\n\n"
-            
-            # Información de VRF
-            vrfs = parsed_data.get('vrfs', [])
-            if vrfs:
-                info_text += f"VRFs encontradas: {len(vrfs)}\n"
-                for vrf in vrfs[:3]:  # Mostrar solo los primeros 3
-                    info_text += f"  - {vrf.get('name', 'N/A')}\n"
-            
-            # Información de VLANs
-            vlans = parsed_data.get('vlans', [])
-            if vlans:
-                info_text += f"\nVLANs encontradas: {len(vlans)}\n"
-                for vlan in vlans[:3]:  # Mostrar solo las primeras 3
-                    info_text += f"  - VLAN {vlan.get('id', 'N/A')}: {vlan.get('name', 'N/A')}\n"
-            
-            # Información de protocolos
-            neighbors = parsed_data.get('neighbors', {})
-            if neighbors.get('ospf'):
-                info_text += f"\nVecinos OSPF: {len(neighbors['ospf'])}\n"
-            if neighbors.get('bgp'):
-                info_text += f"Vecinos BGP: {len(neighbors['bgp'])}\n"
-            
-            # Rutas estáticas
-            static_routes = parsed_data.get('static_routes', [])
-            if static_routes:
-                info_text += f"\nRutas estáticas: {len(static_routes)}\n"
-                for route in static_routes[:3]:  # Mostrar solo las primeras 3
-                    info_text += f"  - {route.get('network', 'N/A')} via {route.get('via', 'N/A')}\n"
+    def create_running_config_section(self, parent):
+        """Crear la sección de Configuración del Router con botón para obtener y guardar."""
+        cfg_frame = tk.Frame(parent, bg='#ffffff')
+        # Expandir verticalmente para ocupar el espacio sobrante cuando la ventana está maximizada
+        cfg_frame.pack(fill=tk.BOTH, expand=True, pady=(30, 0))
+
+        # Cabecera con título a la izquierda y botón a la derecha
+        header = tk.Frame(cfg_frame, bg='#ffffff')
+        header.pack(fill=tk.X, pady=(0, 10))
+
+        title_label = tk.Label(header,
+                               text="🧾 Configuración del Router",
+                               font=("Arial", 16, "bold"),
+                               bg='#ffffff',
+                               fg='#030213')
+        title_label.pack(side=tk.LEFT)
+
+        fetch_btn = ttk.Button(header,
+                               text="Guardar configuración",
+                               command=self.on_save_config)
+        fetch_btn.pack(side=tk.RIGHT)
+
+        # Contenedor para texto con borde
+        text_container = tk.Frame(cfg_frame, bg='white', relief=tk.SOLID, borderwidth=1)
+        text_container.pack(fill=tk.BOTH, expand=True)
+
+        # Área de texto con scroll para mostrar la configuración
+        self.running_config_text = ScrolledText(
+            text_container,
+            height=14,
+            font=("Consolas", 9),
+            wrap=tk.NONE,
+            bg="#f8f9fa",
+            fg="#030213",
+            relief=tk.FLAT,
+            padx=15,
+            pady=15,
+        )
+        self.running_config_text.pack(fill=tk.BOTH, expand=True)
+        # Permitir desplazamiento con la rueda SOLO dentro del área de configuración
+        try:
+            def _on_text_mousewheel(event):
+                # Desplazar el texto sin propagar el evento al canvas
+                self.running_config_text.yview_scroll(int(-1*(event.delta/120)), "units")
+                return "break"
+            self.running_config_text.bind("<MouseWheel>", _on_text_mousewheel)
+        except Exception:
+            pass
+
+        # Mostrar configuración si ya está en shared_data
+        existing_cfg = self.shared_data.get('running_config', '')
+        if existing_cfg:
+            self.running_config_text.insert(tk.END, existing_cfg)
         else:
-            info_text = "No hay datos de análisis disponibles.\nConecta al router para realizar un análisis automático."
-        
-        # Crear widget de texto para mostrar la información
-        text_widget = tk.Text(info_frame, height=12, wrap=tk.WORD, font=("Courier", 9),
-                             bg='#f8f9fa', fg='#030213', relief=tk.FLAT, padx=15, pady=15)
-        text_widget.insert(tk.END, info_text)
-        text_widget.config(state=tk.DISABLED)
-        text_widget.pack(fill=tk.BOTH, expand=True)
-        
+            self.running_config_text.insert(tk.END, "La configuración se cargará automáticamente tras el análisis.")
+        self.running_config_text.config(state=tk.DISABLED)
+
+    def on_save_config(self):
+        """Guarda la configuración ya precargada como archivo .txt."""
+        try:
+            conn = self.shared_data.get('connection_data', {})
+            cfg_text = self.shared_data.get('running_config', '')
+            if not cfg_text:
+                messagebox.showwarning("Sin configuración", "La configuración aún no está disponible.")
+                return
+            # Mostrar y guardar
+            self.running_config_text.config(state=tk.NORMAL)
+            self.running_config_text.delete("1.0", tk.END)
+            self.running_config_text.insert(tk.END, cfg_text)
+            self.running_config_text.config(state=tk.DISABLED)
+            self.save_config_to_file(cfg_text, conn)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al guardar la configuración: {e}")
+
+    def save_config_to_file(self, cfg_text: str, conn: dict):
+        """Pregunta ubicación y guarda la configuración en un archivo .txt."""
+        hostname = conn.get('hostname') or conn.get('port') or 'router'
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        default_name = f"config_{hostname}_{ts}.txt"
+        path = filedialog.asksaveasfilename(
+            defaultextension=".txt",
+            initialfile=default_name,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            title="Guardar configuración"
+        )
+        if path:
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(cfg_text or "")
+                messagebox.showinfo("Guardado", f"Configuración guardada en:\n{path}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar el archivo: {e}")
+
     def refresh(self):
         """Refrescar los datos del dashboard"""
         # Aquí se pueden actualizar los datos desde el dispositivo real

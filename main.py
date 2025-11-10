@@ -88,7 +88,8 @@ class RouterManagerApp:
             'static_routes': [],
             'command_history': [],
             'analysis_data': {},
-            'parsed_data': {}
+            'parsed_data': {},
+            'connection_data': self.connection_data
         }
         
         # Cargar datos del análisis si están disponibles
@@ -103,6 +104,8 @@ class RouterManagerApp:
                 self.shared_data['vrfs'] = connection_data['parsed_data'].get('vrfs', [])
                 self.shared_data['routing_protocols'] = connection_data['parsed_data'].get('routing_protocols', self.shared_data['routing_protocols'])
                 self.shared_data['static_routes'] = connection_data['parsed_data'].get('static_routes', [])
+            # Actualizar también los datos de conexión compartidos
+            self.shared_data['connection_data'] = self.connection_data
         
         # Configurar estilos
         self.setup_styles()
@@ -235,7 +238,7 @@ class RouterManagerApp:
         
         # Definir elementos del menú
         menu_items: List[Tuple[str, str, str]] = [
-            ("📊", "Dashboard", "dashboard"),
+            ("📊", "Información del Router", "dashboard"),
             ("🌐", "Configuración de Interfaces", "interfaces"),
             ("🔀", "Enrutamiento", "routing"),
             ("📈", "Monitoreo", "monitoring"),
@@ -328,7 +331,7 @@ class RouterManagerApp:
         # Título de la sección actual
         self.section_title = tk.Label(
             header_frame,
-            text="Dashboard",
+            text="Información del Router",
             font=TITLE_FONT,
             bg=COLOR_WHITE,
             fg=COLOR_PRIMARY
@@ -436,7 +439,7 @@ class RouterManagerApp:
         
         # Definir títulos de las secciones
         section_titles: Dict[str, str] = {
-            "dashboard": "Dashboard",
+            "dashboard": "Información del Router",
             "interfaces": "Configuración de Interfaces",
             "routing": "Enrutamiento",
             "monitoring": "Monitoreo",
@@ -518,6 +521,11 @@ class RouterManagerApp:
     def on_connection_success(self, parsed_data: Dict[str, Any]):
         """Maneja el éxito de la conexión y actualiza la UI."""
         self.shared_data['parsed_data'] = parsed_data
+        # Guardar configuración prefetch para la sección de configuración
+        try:
+            self.shared_data['running_config'] = parsed_data.get('running_config', '')
+        except Exception:
+            self.shared_data['running_config'] = ''
 
         # Propagar datos clave a nivel superior para que los módulos de UI los usen
         if isinstance(parsed_data, dict):
@@ -580,6 +588,7 @@ def main() -> None:
             "fast_mode": args.fast_mode,
             "vendor_hint": args.vendor_hint,
             "baudrate": args.baudrate if args.protocol == "Serial" else "",
+            "verbose": args.verbose,
         }
         print(f"[CLI] Conectando via {connection_data['protocol']}…")
         target = connection_data.get("hostname") or connection_data.get("port")
@@ -649,4 +658,18 @@ def main() -> None:
     app.run()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("[Exit] Ejecución interrumpida por el usuario (Ctrl+C).")
+        try:
+            # Intentar cerrar ordenadamente la GUI si está activa
+            if tk._default_root is not None:
+                try:
+                    tk._default_root.quit()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Código de salida estándar para Ctrl+C
+        sys.exit(130)

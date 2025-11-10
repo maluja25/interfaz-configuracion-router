@@ -108,14 +108,23 @@ class InterfaceConfigFrame(tk.Frame):
             lambda e: main_canvas.configure(scrollregion=main_canvas.bbox("all"))
         )
         self._canvas_window = main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        # Anclar el ancho del contenido al ancho del canvas (evita espacio vacío en pantalla completa)
+        def _bind_canvas_width(event):
+            try:
+                main_canvas.itemconfig(self._canvas_window, width=event.width)
+            except Exception:
+                pass
+        main_canvas.bind('<Configure>', _bind_canvas_width)
         main_canvas.configure(yscrollcommand=scrollbar.set)
 
         # Contenedor de contenido centrado
         content_frame = tk.Frame(scrollable_frame, bg='#ffffff')
-        content_frame.pack(anchor='n', fill=tk.X)
+        # Permitir que el contenido se expanda verticalmente cuando haya espacio disponible
+        # y añadir margen lateral para separar la scrollbar de los rectángulos
+        content_frame.pack(anchor='n', fill=tk.BOTH, expand=True, padx=12)
 
-        # Estadísticas de interfaces
-        self.create_interface_stats(content_frame)
+        # (Se elimina la sección de estadísticas para simplificar la vista)
+        # self.create_interface_stats(content_frame)
 
         # Lista de interfaces
         self.create_interface_list(content_frame)
@@ -123,12 +132,23 @@ class InterfaceConfigFrame(tk.Frame):
         # Vista previa de comandos
         self.create_command_preview(content_frame)
 
-        # Configurar scroll
+        # Configurar scroll: activar desplazamiento con rueda en el área general
         def _on_mousewheel(event):
-            main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        main_canvas.bind_all("<MouseWheel>", _on_mousewheel)
+            try:
+                direction = -1 if event.delta > 0 else 1
+                main_canvas.yview_scroll(direction, "units")
+            except Exception:
+                pass
+            return "break"
+        # Enlazar a contenedores relevantes para evitar conflictos con otros módulos
+        for _w in (main_canvas, scrollable_frame, content_frame):
+            try:
+                _w.bind("<MouseWheel>", _on_mousewheel)
+            except Exception:
+                pass
 
         main_canvas.pack(side="left", fill="both", expand=True)
+        # Mostrar la barra vertical externa para navegar en pantallas pequeñas
         scrollbar.pack(side="right", fill="y")
         
     def create_interface_stats(self, parent):
@@ -194,7 +214,7 @@ class InterfaceConfigFrame(tk.Frame):
         
         # Frame para la tabla
         table_frame = tk.Frame(list_frame, bg='white', relief=tk.SOLID, borderwidth=1)
-        table_frame.pack(anchor='n', fill=tk.BOTH, expand=True)
+        table_frame.pack(anchor='n', fill=tk.BOTH, expand=True, padx=12)
         
         # Crear Treeview
         columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Descripción')
@@ -237,6 +257,15 @@ class InterfaceConfigFrame(tk.Frame):
         # Empaquetar
         self.interface_tree.pack(side='left', fill='both', expand=True)
         tree_scrollbar.pack(side='right', fill='y')
+        # Permitir desplazamiento con la rueda SOLO dentro de la tabla
+        try:
+            def _on_tree_mousewheel(event):
+                direction = -1 if event.delta > 0 else 1
+                self.interface_tree.yview_scroll(direction, "units")
+                return "break"
+            self.interface_tree.bind("<MouseWheel>", _on_tree_mousewheel)
+        except Exception:
+            pass
         
         # Cargar datos
         self.refresh_interface_list()
@@ -411,7 +440,8 @@ class InterfaceConfigFrame(tk.Frame):
     def create_command_preview(self, parent):
         """Crear vista previa de comandos"""
         preview_frame = tk.Frame(parent, bg='#ffffff')
-        preview_frame.pack(anchor='n', fill=tk.X, pady=(10, 0))
+        # Hacer que el panel de comandos aproveche el espacio vertical disponible
+        preview_frame.pack(anchor='n', fill=tk.BOTH, expand=True, pady=(10, 0), padx=12)
         
         title_label = tk.Label(preview_frame,
                               text="💻 Comandos de Configuración",
@@ -429,12 +459,21 @@ class InterfaceConfigFrame(tk.Frame):
         
         # Terminal frame
         terminal_frame = tk.Frame(preview_frame, bg='black')
-        terminal_frame.pack(anchor='n', fill=tk.X, pady=(0, 8))
+        terminal_frame.pack(anchor='n', fill=tk.BOTH, expand=True, pady=(0, 8))
         
         # Texto del terminal
         terminal_text = tk.Text(terminal_frame, bg='black', fg='#00ff00',
                                 font=("Consolas", 10), height=15, wrap=tk.WORD)
         terminal_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Permitir desplazamiento con la rueda SOLO dentro de la terminal
+        try:
+            def _on_terminal_mousewheel(event):
+                direction = -1 if event.delta > 0 else 1
+                terminal_text.yview_scroll(direction, "units")
+                return "break"
+            terminal_text.bind("<MouseWheel>", _on_terminal_mousewheel)
+        except Exception:
+            pass
         
         # Generar comandos
         commands = ["# Configuración de interfaces activas"]

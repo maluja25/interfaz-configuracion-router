@@ -20,3 +20,10 @@ INTERFACES_BRIEF: Dict[str, str] = {
     "cisco": "show ip interface brief",
     "juniper": "show interfaces terse",
 }
+
+# Comando para obtener la configuración en ejecución por fabricante
+RUNNING_CONFIG: Dict[str, str] = {
+    "huawei": "display current-configuration",
+    "cisco": "show running-config",
+    "juniper": "show configuration",
+}

@@ -434,11 +434,26 @@ class AuthDialog:
             'baudrate': self.baudrate_var.get() if protocol == 'Serial' else ''
         }
         
-        # Si usa credenciales guardadas, cargar los datos
+        # Si usa credenciales guardadas, fusionar sin sobrescribir protocolo/objetivo actual
         if not self.use_username.get() and self.saved_creds_var.get():
             saved_cred = self.saved_credentials.get(self.saved_creds_var.get())
             if saved_cred:
-                self.connection_data.update(saved_cred)
+                # Preservar selección actual del usuario
+                selected_protocol = self.connection_data.get('protocol', 'SSH2')
+                selected_hostname = self.connection_data.get('hostname', '')
+                selected_port = self.connection_data.get('port', '')
+                selected_baudrate = self.connection_data.get('baudrate', '')
+
+                # Copiar solo campos de credenciales/ajustes no críticos
+                for key in ('username', 'password', 'auth_methods', 'session_options', 'fast_mode', 'vendor_hint'):
+                    if key in saved_cred:
+                        self.connection_data[key] = saved_cred[key]
+
+                # Restaurar siempre la selección actual del usuario para evitar inconsistencias
+                self.connection_data['protocol'] = selected_protocol
+                self.connection_data['hostname'] = selected_hostname if selected_protocol != 'Serial' else ''
+                self.connection_data['port'] = selected_port
+                self.connection_data['baudrate'] = selected_baudrate if selected_protocol == 'Serial' else ''
         
         # Mostrar ventana de análisis
         self.show_analysis_window()
