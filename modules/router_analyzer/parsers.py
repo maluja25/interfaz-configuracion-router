@@ -228,7 +228,7 @@ def parse_huawei_static_routes(text: str) -> List[Dict[str, Any]]:
 
     Soporta variantes con "vpn-instance" y máscara en CIDR.
     Devuelve una lista de dicts con claves: dest, mask, next_hop, distance.
-    La distancia se omite (cadena vacía) según requerimiento.
+    Captura opcional de 'preference <n>' como distancia.
     """
     routes: List[Dict[str, Any]] = []
 
@@ -252,7 +252,7 @@ def parse_huawei_static_routes(text: str) -> List[Dict[str, Any]]:
             r"ip\s+route-static\s+(?:vpn-instance\s+\S+\s+)?"  # opcional VRF
             r"(\d{1,3}(?:\.\d{1,3}){3})\s+"                     # destino
             r"((?:\d{1,3}(?:\.\d{1,3}){3})|\d{1,2})\s+"       # máscara o CIDR
-            r"(\d{1,3}(?:\.\d{1,3}){3})",                      # siguiente salto
+            r"(\d{1,3}(?:\.\d{1,3}){3})(?:\s+preference\s+(\d{1,3}))?",  # siguiente salto y preferencia
             line,
             re.IGNORECASE,
         )
@@ -261,12 +261,13 @@ def parse_huawei_static_routes(text: str) -> List[Dict[str, Any]]:
         dest = m.group(1)
         mask_or_cidr = m.group(2)
         next_hop = m.group(3)
+        dist = (m.group(4) or "") if m.lastindex and m.lastindex >= 4 else ""
         mask = mask_or_cidr if "." in mask_or_cidr else cidr_to_mask(mask_or_cidr)
         routes.append({
             "dest": dest,
             "mask": mask,
             "next_hop": next_hop,
-            "distance": "",  # explícitamente sin distancia
+            "distance": dist,
         })
 
     # Eliminar duplicados básicos
@@ -388,6 +389,75 @@ def parse_cisco_version(text: str) -> Dict[str, Any]:
         di["ethernet_ports"] = pe.group(1)
 
     return di
+
+
+def parse_cisco_static_routes(text: str) -> List[Dict[str, Any]]:
+    """Extrae rutas estáticas desde 'show running-config | sec ip route'.
+
+    Soporta formas comunes:
+      ip route <dest> <mask> <next-hop> [distance]
+      ip route vrf <VRF> <dest> <mask> <next-hop> [distance]
+      ip route <dest> <mask> <ifname> <next-hop> [distance]  (captura next-hop)
+    """
+    routes: List[Dict[str, Any]] = []
+
+    def is_ip(s: str) -> bool:
+        return bool(re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", s))
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("cisco#") or "show running-config" in low:
+            continue
+        if not low.startswith("ip route"):
+            continue
+
+        parts = re.split(r"\s+", line)
+        # Buscar patrón con o sin 'vrf'
+        try:
+            idx = 2  # posición del destino
+            if parts[2].lower() == "vrf" and len(parts) >= 4:
+                idx = 4
+            dest = parts[idx]
+            mask = parts[idx + 1]
+            next_tok = parts[idx + 2] if len(parts) > idx + 2 else ""
+            # Capturar next-hop IP; si hay interfaz seguida de IP, tomar la IP
+            next_hop = ""
+            distance = ""
+            if is_ip(next_tok):
+                next_hop = next_tok
+                if len(parts) > idx + 3 and re.match(r"^\d{1,3}$", parts[idx + 3]):
+                    distance = parts[idx + 3]
+            else:
+                # Posible forma: ip route dest mask <ifname> <ip> [dist]
+                if len(parts) > idx + 3 and is_ip(parts[idx + 3]):
+                    next_hop = parts[idx + 3]
+                    if len(parts) > idx + 4 and re.match(r"^\d{1,3}$", parts[idx + 4]):
+                        distance = parts[idx + 4]
+            if not next_hop:
+                # No soportamos rutas solo con interfaz sin IP
+                continue
+            routes.append({
+                "dest": dest,
+                "mask": mask,
+                "next_hop": next_hop,
+                "distance": distance,
+            })
+        except Exception:
+            continue
+
+    # Deduplicar
+    unique: List[Dict[str, Any]] = []
+    seen = set()
+    for r in routes:
+        key = (r["dest"], r["mask"], r["next_hop"], r.get("distance", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(r)
+    return unique
 
 
 # ---------------- Cisco OSPF/BGP Config Parsers -----------------

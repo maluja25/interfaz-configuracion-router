@@ -143,9 +143,10 @@ def analyze(connection_data: Dict[str, Any]) -> Dict[str, Any]:
                 )
             )
             cmds.append(rcfg); labels.append("running")
-        # Añadir consulta de rutas estáticas para Huawei
+        # Añadir consulta de rutas estáticas para el vendor detectado
+        # (Huawei y Cisco según requerimiento; Juniper soportado si mapeado)
         sroute = STATIC_ROUTES.get(ven_key)
-        if sroute and ven_key == "huawei":
+        if sroute:
             cmds.append(sroute); labels.append("static_routes")
         # Vecinos OSPF y resumen/peers BGP
         ospf_cmd = OSPF_NEIGHBORS.get(ven_key)

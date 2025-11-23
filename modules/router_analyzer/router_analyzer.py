@@ -206,6 +206,8 @@ class RouterAnalyzer:
             data["cisco_show_version"] = raw_version
             data["cisco_ip_int_brief"] = raw_ifaces
             data["cisco_running_config"] = raw_running
+            if raw_static:
+                data["cisco_static_routes"] = raw_static
             if raw_ospf_peers:
                 data["cisco_ospf_peer"] = raw_ospf_peers
             if raw_bgp_summary:
@@ -319,6 +321,11 @@ class RouterAnalyzer:
                     has_valid_bgp = bool(parsed_bgp.get("as_number")) or bool(parsed_bgp.get("neighbors"))
                     routing_protocols["bgp"]["config"] = running_cfg if has_valid_bgp else ""
                     routing_protocols["bgp"]["enabled"] = has_valid_bgp
+                # Rutas estáticas Cisco (desde salida filtrada)
+                from .parsers import parse_cisco_static_routes
+                c_static = data.get("cisco_static_routes", "")
+                if c_static:
+                    static_routes = parse_cisco_static_routes(c_static)
                 # Vecinos OSPF Cisco
                 c_ospf_peer = data.get("cisco_ospf_peer", "")
                 if c_ospf_peer:

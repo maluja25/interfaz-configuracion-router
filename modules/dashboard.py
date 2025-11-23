@@ -91,8 +91,7 @@ class DashboardFrame(tk.Frame):
 
         main_canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Grid de estadísticas principales
-        self.create_stats_grid(scrollable_frame)
+        # Grid de estadísticas principales deshabilitado
         
         # Información del dispositivo
         self.create_device_info(scrollable_frame)

@@ -97,8 +97,12 @@ class RoutingConfigFrame(tk.Frame):
     
     def _setup_ui(self) -> None:
         """Configura la interfaz de usuario del módulo de enrutamiento."""
-        # Frame principal con padding
-        main_frame = ttk.Frame(self, style="Card.TFrame", padding=(20, 20))
+        # Estilo limpio para reducir bordes visibles
+        style = ttk.Style()
+        style.configure("Clean.TFrame", background="white", borderwidth=0, relief="flat")
+
+        # Frame principal con padding usando estilo limpio
+        main_frame = ttk.Frame(self, style="Clean.TFrame", padding=(20, 20))
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Título y subtítulo
@@ -112,8 +116,8 @@ class RoutingConfigFrame(tk.Frame):
         notebook = ttk.Notebook(main_frame)
         notebook.pack(fill=tk.BOTH, expand=True)
 
-        protocols_tab = ttk.Frame(notebook, style="Card.TFrame")
-        static_routes_tab = ttk.Frame(notebook, style="Card.TFrame")
+        protocols_tab = ttk.Frame(notebook, style="Clean.TFrame")
+        static_routes_tab = ttk.Frame(notebook, style="Clean.TFrame")
         
         notebook.add(protocols_tab, text="  Protocolos  ")
         notebook.add(static_routes_tab, text="  Rutas Estáticas  ")
@@ -484,9 +488,15 @@ class RoutingConfigFrame(tk.Frame):
             config_btn.pack(side="left", padx=(10, 0))
             return
 
-        # Frame para la configuración del protocolo con borde y fondo para destacarlo
-        config_frame = tk.Frame(parent, bg=COLOR_WHITE, bd=1, relief="solid", 
-                              highlightbackground="#e0e0e0", highlightthickness=1)
+        # Frame para la configuración del protocolo con contorno fino negro
+        config_frame = tk.Frame(
+            parent,
+            bg=COLOR_WHITE,
+            bd=0,
+            relief="flat",
+            highlightbackground="#000000",
+            highlightthickness=1,
+        )
         config_frame.pack(fill="x", pady=(5, 0), expand=True)
         
         # Frame para el encabezado de la sección de configuración
@@ -674,6 +684,10 @@ class RoutingConfigFrame(tk.Frame):
         try:
             container = tk.Frame(self.details_panel, bg=COLOR_WHITE, padx=16, pady=16)
             container.pack(fill=tk.BOTH, expand=True)
+            # Si es OSPF, mostrar el formulario estructurado
+            if protocol_id == PROTOCOL_OSPF:
+                self._render_ospf_config_form(container)
+                return
             ttk.Label(container, text=f"Configuración de {protocol_id.upper()}",
                       font=("Arial", 13, "bold"), background=COLOR_WHITE).pack(anchor="w", pady=(0, 10))
 
@@ -712,6 +726,306 @@ class RoutingConfigFrame(tk.Frame):
             ttk.Button(btns, text="Limpiar", command=lambda: text.delete("1.0", tk.END), style="Secondary.TButton").pack(side="left")
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo abrir el editor: {e}")
+    
+    def _render_ospf_config_form(self, container: tk.Frame) -> None:
+        """Formulario de configuración OSPF: process-id, router-id y redes."""
+        ttk.Label(container, text="Configuración de OSPF", font=("Arial", 13, "bold"), background=COLOR_WHITE).pack(anchor="w", pady=(0, 10))
+
+        form = tk.Frame(container, bg=COLOR_WHITE)
+        form.pack(fill=tk.X, expand=False)
+
+        # Router OSPF (process-id)
+        tk.Label(form, text="Router OSPF", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        self.ospf_pid_entry = ttk.Entry(form, width=12)
+        self.ospf_pid_entry.grid(row=0, column=1, sticky="w")
+
+        # Router-ID
+        tk.Label(form, text="Router-ID", font=("Arial", 10), bg=COLOR_WHITE).grid(row=1, column=0, sticky="w", padx=(0, 8))
+        self.ospf_rid_entry = ttk.Entry(form, width=16)
+        self.ospf_rid_entry.grid(row=1, column=1, sticky="w")
+
+        # Precargar existentes
+        ospf = (self.shared_data.get('routing_protocols', {}).get(PROTOCOL_OSPF, {}) or {})
+        if ospf.get('process_id'):
+            self.ospf_pid_entry.insert(0, str(ospf.get('process_id')))
+        if ospf.get('router_id'):
+            self.ospf_rid_entry.insert(0, str(ospf.get('router_id')))
+
+        # Caja de redes con contorno negro de 1 px
+        box = tk.Frame(container, bg=COLOR_WHITE, bd=0, relief="flat", highlightthickness=1, highlightbackground="#000000")
+        box.pack(fill=tk.X, expand=False, pady=(10, 0))
+
+        hdr = tk.Frame(box, bg="#f7f7f7")
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="Network", font=("Arial", 10, "bold"), bg="#f7f7f7").pack(side="left", padx=10, pady=6)
+
+        row = tk.Frame(box, bg=COLOR_WHITE, padx=10, pady=10)
+        row.pack(fill=tk.X)
+        tk.Label(row, text="Red/IP", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w")
+        self.ospf_net_entry = ttk.Entry(row)
+        self.ospf_net_entry.grid(row=0, column=1, sticky="ew", padx=(8, 16))
+
+        tk.Label(row, text="Wildcard", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=2, sticky="w")
+        self.ospf_wild_entry = ttk.Entry(row)
+        self.ospf_wild_entry.grid(row=0, column=3, sticky="ew", padx=(8, 16))
+
+        tk.Label(row, text="Area", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=4, sticky="w")
+        self.ospf_area_entry = ttk.Entry(row, width=10)
+        self.ospf_area_entry.grid(row=0, column=5, sticky="w", padx=(8, 0))
+
+        add_btn = ttk.Button(row, text="+", width=3, command=self._add_ospf_network)
+        add_btn.grid(row=0, column=6, sticky="w", padx=(12, 0))
+
+        # Tabla de redes agregadas en formato de celdas (como la vista de vecinos)
+        self.ospf_list_frame = tk.Frame(box, bg=COLOR_WHITE, bd=0, relief="flat")
+        self.ospf_list_frame.pack(fill=tk.X, padx=10, pady=(6, 10))
+        self.ospf_table_headers = ["Red/IP", "Wildcard", "Area"]
+        # Datos de filas actuales (listas para edición)
+        self.ospf_net_rows: List[List[str]] = [
+            [n.get('network',''), n.get('wildcard',''), n.get('area','')] for n in (ospf.get('networks', []) or [])
+        ]
+        # Referencias a labels por celda para edición y selección
+        self._ospf_cell_labels: List[List[tk.Label]] = []
+        self._selected_ospf_row_index: Optional[int] = None
+        self._ospf_cell_editor: Optional[ttk.Entry] = None
+        self._render_ospf_cells_table()
+
+        # Acciones
+        actions = tk.Frame(container, bg=COLOR_WHITE)
+        actions.pack(fill=tk.X, pady=(12, 0))
+
+        def on_save():
+            pid = self.ospf_pid_entry.get().strip()
+            rid = self.ospf_rid_entry.get().strip()
+
+            self.shared_data.setdefault('routing_protocols', {}).setdefault(PROTOCOL_OSPF, {})
+            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['process_id'] = pid
+            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['router_id'] = rid
+
+            nets = []
+            for row in self.ospf_net_rows:
+                if len(row) >= 3 and row[0] and row[1] and row[2]:
+                    nets.append({"network": row[0], "wildcard": row[1], "area": row[2]})
+            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['networks'] = nets
+
+            enabled = bool(pid) or bool(nets)
+            self.shared_data['routing_protocols'][PROTOCOL_OSPF][ENABLED] = enabled
+
+            try:
+                self.resync_protocol_states()
+            except Exception:
+                pass
+
+            messagebox.showinfo("Configuración Guardada", "Configuración de OSPF guardada.")
+
+        def on_delete_selected():
+            idx = getattr(self, '_selected_ospf_row_index', None)
+            if idx is None:
+                messagebox.showwarning("Eliminar Red", "Selecciona una fila para eliminar.")
+                return
+            try:
+                del self.ospf_net_rows[idx]
+                self._selected_ospf_row_index = None
+                self._render_ospf_cells_table()
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo eliminar la fila: {e}")
+
+        ttk.Button(actions, text="Guardar", command=on_save, style="Primary.TButton").pack(side="right")
+        ttk.Button(actions, text="Eliminar Red", command=on_delete_selected, style="Secondary.TButton").pack(side="left")
+
+    def _add_ospf_network(self) -> None:
+        """Añade una red a la tabla de celdas OSPF."""
+        try:
+            net = (self.ospf_net_entry.get() or "").strip()
+            wild = (self.ospf_wild_entry.get() or "").strip()
+            area = (self.ospf_area_entry.get() or "").strip()
+            if not net or not wild or not area:
+                messagebox.showwarning("Campos incompletos", "Completa Red/IP, Wildcard y Area.")
+                return
+            self.ospf_net_rows.append([net, wild, area])
+            self._render_ospf_cells_table()
+            self.ospf_net_entry.delete(0, tk.END)
+            self.ospf_wild_entry.delete(0, tk.END)
+            self.ospf_area_entry.delete(0, tk.END)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo añadir la red: {e}")
+
+    def _render_ospf_cells_table(self) -> None:
+        """Construye la tabla tipo celdas (labels con bordes) y soporta edición con doble clic."""
+        try:
+            # Limpiar contenido previo
+            for child in self.ospf_list_frame.winfo_children():
+                child.destroy()
+            self._ospf_cell_labels = []
+
+            # Color de separadores y contorno en negro marcado
+            sep_color = "#000000"
+            # Tabla con contorno exterior tenue (sin relieve negro)
+            table = tk.Frame(
+                self.ospf_list_frame,
+                bg=COLOR_WHITE,
+                bd=0,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground=sep_color,
+            )
+            table.pack(fill=tk.X, expand=False)
+
+            # Color para separadores de la grilla (línea fina de 1px)
+            sep_color = "#000000"
+
+            col_count = len(self.ospf_table_headers)
+            # Estructura: [borde izq] celda | sep | celda | ... | [borde der]
+            total_cols = col_count * 2 + 1
+
+            # Usar solo el contorno del Frame para el borde exterior (evita dobles líneas)
+
+            # Encabezados (sin borde), con separadores verticales entre columnas
+            for c, title in enumerate(self.ospf_table_headers):
+                header = tk.Label(
+                    table,
+                    text=title,
+                    font=("Arial", 9, "bold"),
+                    bg="#f7f7f7",
+                    bd=0,
+                    padx=6,
+                    pady=4,
+                    anchor="center",
+                )
+                header.grid(row=0, column=1 + c * 2, sticky="nsew")
+                # No dibujamos separadores verticales por celda; los unificamos más abajo
+
+            # Sin bordes adicionales: el contorno del Frame define el borde exterior
+
+            # Separador horizontal bajo encabezado
+            hsep = tk.Frame(table, bg=sep_color, height=1)
+            hsep.grid(row=1, column=0, columnspan=total_cols, sticky="ew")
+
+            # Filas de datos (sin borde), con separadores y bordes verticales externos
+            for r, row in enumerate(self.ospf_net_rows, start=2):
+                
+                label_row: List[tk.Label] = []
+                for c, cell in enumerate(row):
+                    lbl = tk.Label(
+                        table,
+                        text=str(cell),
+                        font=("Arial", 9),
+                        bg=COLOR_WHITE,
+                        bd=0,
+                        padx=6,
+                        pady=3,
+                        anchor="w",
+                    )
+                    lbl.grid(row=r, column=1 + c * 2, sticky="nsew")
+                    lbl.bind('<Button-1>', lambda e, ri=r-2: self._select_ospf_row(ri))
+                    lbl.bind('<Double-1>', lambda e, ri=r-2, ci=c: self._start_edit_ospf_cell(ri, ci))
+                    label_row.append(lbl)
+                self._ospf_cell_labels.append(label_row)
+
+                # Sin bordes verticales adicionales por fila
+
+                # Separador horizontal bajo la fila
+                # Separador horizontal solo entre filas (evita doble línea con el borde inferior)
+                if r < (len(self.ospf_net_rows) + 1):
+                    hsep_row = tk.Frame(table, bg=sep_color, height=1)
+                    hsep_row.grid(row=r + 1, column=0, columnspan=total_cols, sticky="ew")
+
+            # Separadores verticales de columnas continuos (de encabezado a última fila)
+            for c in range(col_count - 1):
+                col_sep = tk.Frame(table, bg=sep_color, width=1)
+                # cubre: fila 0 (encabezado) + 1 (hsep) + N filas de datos + 1 (último hsep)
+                col_sep.grid(row=0, column=2 + c * 2, rowspan=len(self.ospf_net_rows) + 2, sticky="ns")
+
+            # Configurar pesos: expanden solo las columnas de contenido
+            for c in range(total_cols):
+                table.grid_columnconfigure(c, weight=1 if c % 2 == 1 else 0)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo renderizar la tabla: {e}")
+
+    def _select_ospf_row(self, index: int) -> None:
+        """Marca una fila como seleccionada para acciones (eliminar)."""
+        try:
+            self._selected_ospf_row_index = index
+            # Reset de estilos
+            for r, label_row in enumerate(self._ospf_cell_labels):
+                for lbl in label_row:
+                    lbl.configure(bg=COLOR_WHITE, fg="#000000")
+            # Estilo de selección
+            for lbl in self._ospf_cell_labels[index]:
+                lbl.configure(bg="#dbe9ff", fg="#000000")
+        except Exception:
+            pass
+
+    def _start_edit_ospf_cell(self, row_index: int, col_index: int) -> None:
+        """Crea un Entry superpuesto para editar el valor de una celda."""
+        try:
+            lbl = self._ospf_cell_labels[row_index][col_index]
+            # Coordenadas dentro del contenedor
+            x = lbl.winfo_x()
+            y = lbl.winfo_y()
+            w = lbl.winfo_width()
+            h = lbl.winfo_height()
+
+            if self._ospf_cell_editor is not None:
+                try:
+                    self._ospf_cell_editor.destroy()
+                except Exception:
+                    pass
+                self._ospf_cell_editor = None
+
+            editor = ttk.Entry(lbl.master)
+            editor.insert(0, self.ospf_net_rows[row_index][col_index])
+            editor.place(x=x, y=y, width=w, height=h)
+            editor.focus()
+            self._ospf_cell_editor = editor
+
+            def commit(event=None):
+                val = editor.get().strip()
+                self.ospf_net_rows[row_index][col_index] = val
+                lbl.configure(text=val)
+                editor.destroy()
+                self._ospf_cell_editor = None
+
+            editor.bind('<Return>', commit)
+            editor.bind('<FocusOut>', commit)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo editar la celda: {e}")
+
+    def _on_ospf_table_double_click(self, event) -> None:
+        """Inicia edición de una celda de la tabla de redes OSPF."""
+        try:
+            tree = self.ospf_net_table
+            row_id = tree.identify_row(event.y)
+            col = tree.identify_column(event.x)  # '#1', '#2', '#3'
+            if not row_id or col == '#0':
+                return
+            # Ubicación de la celda
+            x, y, w, h = tree.bbox(row_id, col)
+            if w <= 0 or h <= 0:
+                return
+            index = int(col.replace('#', '')) - 1
+            current = tree.item(row_id, 'values')[index]
+
+            # Crear editor superpuesto
+            self._ospf_cell_editor = ttk.Entry(tree)
+            self._ospf_cell_editor.insert(0, current)
+            self._ospf_cell_editor.place(x=x, y=y, width=w, height=h)
+            self._ospf_cell_editor.focus()
+
+            def commit(event=None):
+                try:
+                    new_val = self._ospf_cell_editor.get().strip()
+                    vals = list(tree.item(row_id, 'values'))
+                    vals[index] = new_val
+                    tree.item(row_id, values=vals)
+                finally:
+                    self._ospf_cell_editor.destroy()
+                    self._ospf_cell_editor = None
+
+            self._ospf_cell_editor.bind('<Return>', commit)
+            self._ospf_cell_editor.bind('<FocusOut>', commit)
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo editar la celda: {e}")
     
     def open_protocol_config_editor(self, protocol_id: str) -> None:
         """Abre un editor modal para configurar el protocolo seleccionado.
@@ -892,9 +1206,24 @@ class RoutingConfigFrame(tk.Frame):
         Args:
             parent: Frame padre donde se colocarán los elementos
         """
-        # Frame principal para la pestaña
-        static_routes_frame = ttk.Frame(parent, style="Card.TFrame")
-        static_routes_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Estilo limpio sin bordes para reducir cuadros visibles
+        style = ttk.Style()
+        style.configure("Clean.TFrame", background="white", borderwidth=0, relief="flat")
+
+        # Contenedor con borde exterior para toda la sección
+        static_routes_border = tk.Frame(
+            parent,
+            bg=COLOR_WHITE,
+            bd=1,
+            relief="solid",
+            highlightbackground=COLOR_CARD_BORDER,
+            highlightthickness=1,
+        )
+        static_routes_border.pack(fill=tk.BOTH, expand=True, pady=10, padx=10)
+
+        # Frame interno usando estilo limpio dentro del borde
+        static_routes_frame = ttk.Frame(static_routes_border, style="Clean.TFrame")
+        static_routes_frame.pack(fill=tk.BOTH, expand=True)
 
         # Crear el formulario para añadir rutas
         self._create_static_route_form(static_routes_frame)
@@ -908,44 +1237,58 @@ class RoutingConfigFrame(tk.Frame):
         Args:
             parent: Frame padre donde se colocará el formulario
         """
-        # Frame para el formulario
-        form_frame = ttk.Frame(parent, style="Card.TFrame", padding=(15, 15))
-        form_frame.pack(fill=tk.X, padx=10, pady=10)
+        # Borde alrededor del formulario
+        form_border = tk.Frame(
+            parent,
+            bg=COLOR_WHITE,
+            bd=1,
+            relief="solid",
+            highlightbackground=COLOR_CARD_BORDER,
+            highlightthickness=1,
+        )
+        form_border.pack(fill=tk.X, padx=10, pady=10)
+
+        # Frame para el formulario dentro del borde
+        form_frame = ttk.Frame(form_border, style="Clean.TFrame", padding=(15, 15))
+        form_frame.pack(fill=tk.X)
         
-        # Título del formulario
+        # Configurar columnas para un layout centrado y uniforme (botón en la misma fila)
+        form_frame.grid_columnconfigure(0, weight=1, uniform="route")
+        form_frame.grid_columnconfigure(1, weight=1, uniform="route")
+        form_frame.grid_columnconfigure(2, weight=1, uniform="route")
+        form_frame.grid_columnconfigure(3, weight=0)
+        
+        # Título del formulario centrado
         form_title = ttk.Label(
             form_frame, 
             text="Añadir Nueva Ruta Estática", 
             font=("Arial", 12, "bold"), 
             background="white"
         )
-        form_title.grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        form_title.grid(row=0, column=0, columnspan=4, sticky="n", pady=(0, 12))
 
-        # Campos del formulario - Primera columna
+        # Etiquetas sobre los campos, distribuidas en tres columnas
         ttk.Label(form_frame, text="Red de Destino:", background="white").grid(
-            row=1, column=0, sticky="w", padx=(0, 5)
+            row=1, column=0, sticky="w", padx=5
         )
-        self.dest_net_entry = ttk.Entry(form_frame)
-        self.dest_net_entry.grid(row=1, column=1, sticky="ew", padx=5)
-
         ttk.Label(form_frame, text="Máscara de Subred:", background="white").grid(
-            row=2, column=0, sticky="w", padx=(0, 5)
+            row=1, column=1, sticky="w", padx=5
         )
+        ttk.Label(form_frame, text="Siguiente Salto:", background="white").grid(
+            row=1, column=2, sticky="w", padx=5
+        )
+
+        # Campos alineados y expandibles
+        self.dest_net_entry = ttk.Entry(form_frame)
+        self.dest_net_entry.grid(row=2, column=0, sticky="ew", padx=5)
+        
         self.subnet_mask_entry = ttk.Entry(form_frame)
         self.subnet_mask_entry.grid(row=2, column=1, sticky="ew", padx=5)
-
-        # Campos del formulario - Segunda columna
-        ttk.Label(form_frame, text="Siguiente Salto:", background="white").grid(
-            row=1, column=2, sticky="w", padx=(15, 5)
-        )
-        self.next_hop_entry = ttk.Entry(form_frame)
-        self.next_hop_entry.grid(row=1, column=3, sticky="ew", padx=5)
         
-        ttk.Label(form_frame, text="Distancia (opcional):", background="white").grid(
-            row=2, column=2, sticky="w", padx=(15, 5)
-        )
-        self.distance_entry = ttk.Entry(form_frame)
-        self.distance_entry.grid(row=2, column=3, sticky="ew", padx=5)
+        self.next_hop_entry = ttk.Entry(form_frame)
+        self.next_hop_entry.grid(row=2, column=2, sticky="ew", padx=5)
+
+        # Campo de distancia eliminado según requerimiento
 
         # Botón para añadir ruta
         add_button = ttk.Button(
@@ -953,11 +1296,8 @@ class RoutingConfigFrame(tk.Frame):
             text="Añadir Ruta", 
             command=self.add_static_route
         )
-        add_button.grid(row=3, column=3, sticky="e", pady=(10, 0))
-
-        # Configurar el comportamiento de redimensionamiento
-        form_frame.grid_columnconfigure(1, weight=1)
-        form_frame.grid_columnconfigure(3, weight=1)
+        # Botón en la misma fila que los campos, a la derecha
+        add_button.grid(row=2, column=3, sticky="ew", padx=(10, 0))
     
     def _create_static_routes_table(self, parent: ttk.Frame) -> None:
         """Crea la tabla para visualizar y gestionar rutas estáticas.
@@ -965,9 +1305,22 @@ class RoutingConfigFrame(tk.Frame):
         Args:
             parent: Frame padre donde se colocará la tabla
         """
-        # Frame para la tabla
-        table_frame = ttk.Frame(parent, style="Card.TFrame", padding=(15, 15))
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Borde exterior del bloque de tabla
+        table_border = tk.Frame(
+            parent,
+            bg=COLOR_WHITE,
+            bd=1,
+            relief="solid",
+            highlightbackground=COLOR_CARD_BORDER,
+            highlightthickness=1,
+        )
+        table_border.pack(fill=tk.X, expand=False, padx=10, pady=10)
+
+        # Frame para la tabla con estilo limpio y sin expansión vertical dentro del borde
+        table_frame = ttk.Frame(table_border, style="Clean.TFrame", padding=(15, 15))
+        table_frame.pack(fill=tk.X, expand=False)
+        table_frame.grid_columnconfigure(0, weight=1)
+        table_frame.grid_columnconfigure(1, weight=0)
 
         # Título de la tabla
         table_title = ttk.Label(
@@ -976,34 +1329,47 @@ class RoutingConfigFrame(tk.Frame):
             font=("Arial", 12, "bold"), 
             background="white"
         )
-        table_title.pack(anchor="w", pady=(0, 10))
+        table_title.grid(row=0, column=0, sticky="n", pady=(0, 10))
 
-        # Definir columnas de la tabla
-        columns = ("destino", "mascara", "siguiente_salto", "distancia")
-        self.routes_table = ttk.Treeview(table_frame, columns=columns, show="headings")
-
-        # Configurar encabezados
-        self.routes_table.heading("destino", text="Red de Destino")
-        self.routes_table.heading("mascara", text="Máscara de Subred")
-        self.routes_table.heading("siguiente_salto", text="Siguiente Salto")
-        self.routes_table.heading("distancia", text="Distancia")
+        # Contenedor de tabla estilo celdas (como BGP/OSPF)
+        self.routes_table_container = tk.Frame(table_frame, bg="white")
+        self.routes_table_container.grid(row=1, column=0, columnspan=2, sticky="ew")
         
-        # Configurar columnas
-        self.routes_table.column("destino", width=150)
-        self.routes_table.column("mascara", width=150)
-        self.routes_table.column("siguiente_salto", width=150)
-        self.routes_table.column("distancia", width=100)
+        # Estado de selección para filas
+        self.selected_route_index: Optional[int] = None
+        self.routes_rows_widgets: List[List[tk.Label]] = []
 
-        # Añadir la tabla al frame
-        self.routes_table.pack(fill=tk.BOTH, expand=True)
+        # Construir la tabla inicialmente
+        self.refresh_routes_table()
 
-        # Botón para eliminar ruta seleccionada
+        # Acciones bajo la tabla: eliminar (izquierda) y guardar (derecha)
+        actions_frame = tk.Frame(table_frame, bg="white")
+        actions_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        actions_frame.grid_columnconfigure(0, weight=1)
+        actions_frame.grid_columnconfigure(1, weight=1)
+
         delete_button = ttk.Button(
-            table_frame, 
-            text="Eliminar Ruta Seleccionada", 
-            command=self.delete_static_route
+            actions_frame,
+            text="Eliminar Ruta Seleccionada",
+            command=self.delete_static_route,
         )
-        delete_button.pack(pady=(10, 0), anchor="e")
+        delete_button.grid(row=0, column=0, sticky="w")
+
+        def _save_static_routes():
+            try:
+                # En este módulo las rutas ya están en shared_data; "Guardar" actualiza vista previa
+                self.update_preview()
+                messagebox.showinfo("Configuración Guardada", "Rutas estáticas guardadas.")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar: {e}")
+
+        save_button = ttk.Button(
+            actions_frame,
+            text="Guardar",
+            command=_save_static_routes,
+            style="Primary.TButton",
+        )
+        save_button.grid(row=0, column=1, sticky="e")
 
 
     def add_static_route(self) -> None:
@@ -1018,7 +1384,7 @@ class RoutingConfigFrame(tk.Frame):
             dest = self.dest_net_entry.get().strip()
             mask = self.subnet_mask_entry.get().strip()
             next_hop = self.next_hop_entry.get().strip()
-            distance = self.distance_entry.get().strip()
+            # Campo distancia eliminado
             
             # Validar campos obligatorios
             if not dest or not mask or not next_hop:
@@ -1031,7 +1397,6 @@ class RoutingConfigFrame(tk.Frame):
                 'dest': dest,
                 'mask': mask,
                 'next_hop': next_hop,
-                'distance': distance
             }
 
             self.shared_data['static_routes'].append(new_route)
@@ -1043,7 +1408,7 @@ class RoutingConfigFrame(tk.Frame):
             self.dest_net_entry.delete(0, tk.END)
             self.subnet_mask_entry.delete(0, tk.END)
             self.next_hop_entry.delete(0, tk.END)
-            self.distance_entry.delete(0, tk.END)
+            # Campo distancia eliminado
             
         except Exception as e:
             messagebox.showerror("Error", f"Error al añadir ruta: {str(e)}")
@@ -1072,8 +1437,8 @@ class RoutingConfigFrame(tk.Frame):
 
     def delete_static_route(self) -> None:
         """Elimina la ruta estática seleccionada de la tabla."""
-        selected_items = self.routes_table.selection()
-        if not selected_items:
+        # Usar selección de la tabla de celdas
+        if self.selected_route_index is None:
             messagebox.showwarning("Ninguna selección", "Por favor, selecciona al menos una ruta para eliminar.")
             return
 
@@ -1082,22 +1447,10 @@ class RoutingConfigFrame(tk.Frame):
             return
 
         try:
-            for item in selected_items:
-                item_values = self.routes_table.item(item, 'values')
-                
-                # Encontrar y eliminar la ruta de shared_data
-                route_to_delete = None
-                for route in self.shared_data['static_routes']:
-                    # Comparar valores para encontrar la coincidencia
-                    if (route['dest'] == item_values[0] and
-                        route['mask'] == item_values[1] and
-                        route['next_hop'] == item_values[2] and
-                        route.get('distance', '') == item_values[3]):
-                        route_to_delete = route
-                        break
-                
-                if route_to_delete:
-                    self.shared_data['static_routes'].remove(route_to_delete)
+            # Eliminar por índice seleccionado
+            if 0 <= self.selected_route_index < len(self.shared_data['static_routes']):
+                del self.shared_data['static_routes'][self.selected_route_index]
+                self.selected_route_index = None
 
             self.refresh_routes_table()
             self.update_preview()
@@ -1105,20 +1458,110 @@ class RoutingConfigFrame(tk.Frame):
             messagebox.showerror("Error", f"Error al eliminar ruta: {str(e)}")
 
     def refresh_routes_table(self) -> None:
-        """Limpia y vuelve a cargar la tabla de rutas estáticas."""
+        """Construye la tabla con separadores uniformes de 1 px (vertical y horizontal)."""
         try:
-            # Limpiar tabla
-            for item in self.routes_table.get_children():
-                self.routes_table.delete(item)
-            
-            # Llenar con datos actualizados
-            for route in self.shared_data.get('static_routes', []):
-                self.routes_table.insert("", tk.END, values=(
-                    route.get('dest', ''),
-                    route.get('mask', ''),
-                    route.get('next_hop', ''),
-                    route.get('distance', '')
-                ))
+            # Limpiar contenedor
+            for child in getattr(self, 'routes_table_container', tk.Frame()).winfo_children():
+                child.destroy()
+            self.routes_rows_widgets = []
+
+            headers = ["Red de Destino", "Máscara de Subred", "Siguiente Salto"]
+            # Estructura de columnas: borde izq (0), datos (1,3,5), separadores internos (2,4), borde der (6)
+            data_cols = [1, 3, 5]
+            sep_cols_inner = [2, 4]
+            border_cols = [0, 6]
+            line_color = "#000000"
+
+            # Configurar columnas
+            for c in data_cols:
+                self.routes_table_container.grid_columnconfigure(c, weight=1)
+            for c in sep_cols_inner + border_cols:
+                self.routes_table_container.grid_columnconfigure(c, weight=0)
+
+            # Encabezados sin bordes; separadores verticales por separado para evitar grosor doble
+            for i, title in enumerate(headers):
+                lbl = tk.Label(
+                    self.routes_table_container,
+                    text=title,
+                    font=("Arial", 10, "bold"),
+                    bg="#EAEAEA",
+                    bd=0,
+                    relief="flat",
+                    padx=6,
+                    pady=4,
+                    anchor="center",
+                )
+                lbl.grid(row=1, column=data_cols[i], sticky="nsew")
+
+            routes = self.shared_data.get('static_routes', [])
+            selection_bg = "#0078D7"
+            selection_fg = "white"
+
+            def select_row(idx: int):
+                self.selected_route_index = idx
+                for r_idx, row_widgets in enumerate(self.routes_rows_widgets):
+                    for w in row_widgets:
+                        w.configure(
+                            bg=selection_bg if r_idx == idx else "white",
+                            fg=selection_fg if r_idx == idx else "#030213",
+                        )
+
+            # Separadores verticales que abarcan todo el bloque (incluye línea superior)
+            total_rows = (5 if not routes else (2 * len(routes) + 3))  # top + header + hsep + filas + hseps
+            for sc in border_cols + sep_cols_inner:
+                vsep = tk.Frame(self.routes_table_container, bg=line_color, width=1)
+                vsep.grid(row=0, column=sc, rowspan=total_rows, sticky="ns")
+
+            # Línea superior del bloque
+            hsep_top = tk.Frame(self.routes_table_container, bg=line_color, height=1)
+            hsep_top.grid(row=0, column=0, columnspan=7, sticky="ew")
+            # Separador horizontal bajo el encabezado
+            hsep_header = tk.Frame(self.routes_table_container, bg=line_color, height=1)
+            hsep_header.grid(row=2, column=0, columnspan=7, sticky="ew")
+
+            # Filas de datos
+            if not routes:
+                nodata = tk.Label(
+                    self.routes_table_container,
+                    text="Sin datos",
+                    font=("Arial", 10, "italic"),
+                    bg="white",
+                    fg="#666666",
+                    bd=0,
+                    relief="flat",
+                    padx=6,
+                    pady=4,
+                    anchor="w",
+                )
+                nodata.grid(row=3, column=0, columnspan=7, sticky="nsew")
+                hsep = tk.Frame(self.routes_table_container, bg=line_color, height=1)
+                hsep.grid(row=4, column=0, columnspan=7, sticky="ew")
+            else:
+                for r_idx, route in enumerate(routes):
+                    row_widgets = []
+                    values = [route.get('dest', ''), route.get('mask', ''), route.get('next_hop', '')]
+                    base_row = 3 + r_idx * 2
+                    for i, cell in enumerate(values):
+                        cell_lbl = tk.Label(
+                            self.routes_table_container,
+                            text=str(cell),
+                            font=("Arial", 10),
+                            bg="white",
+                            fg="#030213",
+                            bd=0,
+                            relief="flat",
+                            padx=6,
+                            pady=3,
+                            anchor="center",
+                        )
+                        cell_lbl.grid(row=base_row, column=data_cols[i], sticky="nsew")
+                        # Bind click para selección
+                        cell_lbl.bind("<Button-1>", lambda e, idx=r_idx: select_row(idx))
+                        row_widgets.append(cell_lbl)
+                    self.routes_rows_widgets.append(row_widgets)
+                    # Separador horizontal bajo la fila
+                    hsep = tk.Frame(self.routes_table_container, bg=line_color, height=1)
+                    hsep.grid(row=base_row + 1, column=0, columnspan=7, sticky="ew")
         except Exception as e:
             messagebox.showerror("Error", f"Error al actualizar tabla de rutas: {str(e)}")
 
@@ -1253,6 +1696,9 @@ class RoutingConfigFrame(tk.Frame):
                 # Generar comandos según el tipo de protocolo
                 if protocol_id == PROTOCOL_OSPF:
                     commands.append(f"router ospf {protocol_data.get('process_id', '1')}")
+                    rid = protocol_data.get('router_id')
+                    if rid:
+                        commands.append(f"router-id {rid}")
                     for network in protocol_data.get('networks', []):
                         if network.get('network') and network.get('wildcard') and network.get('area'):
                             commands.append(f"  network {network['network']} {network['wildcard']} area {network['area']}")
@@ -1300,15 +1746,11 @@ class RoutingConfigFrame(tk.Frame):
                     continue
                     
                 if is_huawei:
-                    # Sintaxis Huawei: ip route-static DEST MASK NEXT_HOP [preference DIST]
+                    # Sintaxis Huawei sin distancia
                     cmd = f"ip route-static {route['dest']} {route['mask']} {route['next_hop']}"
-                    if route.get('distance'):
-                        cmd += f" preference {route['distance']}"
                 else:
-                    # Sintaxis Cisco: ip route DEST MASK NEXT_HOP [DIST]
+                    # Sintaxis Cisco sin distancia
                     cmd = f"ip route {route['dest']} {route['mask']} {route['next_hop']}"  
-                    if route.get('distance'):
-                        cmd += f" {route['distance']}"
                 commands.append(cmd)
         except Exception as e:
             print(f"Error al generar comandos de rutas estáticas: {str(e)}")
