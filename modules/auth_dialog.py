@@ -10,11 +10,14 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from router_analyzer.router_analyzer import RouterAnalyzer
 
 class AuthDialog:
-    def __init__(self):
+    def __init__(self, verbose: bool = False):
         self.root = tk.Tk()
         self.root.title("Router Manager - Conexión")
         self.root.resizable(True, True)
         self.root.configure(bg='#f8f9fa')
+        self.root.protocol("WM_DELETE_WINDOW", self.cancel_connection)
+        # Flag de salida verbosa (permitido desde CLI)
+        self.verbose = bool(verbose)
         
         # Variables de conexión
         self.connection_data = None
@@ -125,11 +128,11 @@ class AuthDialog:
     def create_connection_config(self, parent):
         """Crear la sección de configuración de conexión"""
         # Frame principal con grid para mejor organización
-        main_config_frame = tk.Frame(parent, bg='white')
-        main_config_frame.pack(fill=tk.X, pady=(0, 10))
+        self.main_config_frame = tk.Frame(parent, bg='white')
+        self.main_config_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Primera fila: Protocolo y Hostname
-        row1_frame = tk.Frame(main_config_frame, bg='white')
+        row1_frame = tk.Frame(self.main_config_frame, bg='white')
         row1_frame.pack(fill=tk.X, pady=(0, 10))
         
         # Protocolo
@@ -164,17 +167,10 @@ class AuthDialog:
         self.hostname_entry = ttk.Entry(self.hostname_frame, textvariable=self.hostname_var, width=20)
         self.hostname_entry.pack(anchor=tk.W, pady=(2, 0))
 
-        # Fabricante conocido (opcional)
-        vendor_frame = tk.Frame(main_config_frame, bg='white')
-        vendor_frame.pack(fill=tk.X, pady=(0, 10))
-        tk.Label(vendor_frame, text="Fabricante (opcional):", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
-        self.vendor_hint_var = tk.StringVar(value="Auto")
-        vendor_cb = ttk.Combobox(vendor_frame, textvariable=self.vendor_hint_var,
-                                 values=["Auto", "Huawei", "Cisco", "Juniper"], state="readonly", width=12)
-        vendor_cb.pack(anchor=tk.W, pady=(2,0))
+        # (Eliminado) Selector de fabricante: ahora siempre se autodetecta
         
         # Segunda fila: Puerto
-        self.port_frame = tk.Frame(main_config_frame, bg='white')
+        self.port_frame = tk.Frame(self.main_config_frame, bg='white')
         self.port_frame.pack(fill=tk.X, pady=(0, 10))
         
         self.net_port_label = tk.Label(self.port_frame, text="Puerto:", font=("Arial", 10, "bold"), bg='white')
@@ -184,13 +180,13 @@ class AuthDialog:
         self.net_port_entry.pack(anchor=tk.W, pady=(2, 0))
         
         # Credenciales
-        cred_frame = tk.Frame(main_config_frame, bg='white')
-        cred_frame.pack(fill=tk.X, pady=(0, 10))
+        self.cred_frame = tk.Frame(self.main_config_frame, bg='white')
+        self.cred_frame.pack(fill=tk.X, pady=(0, 10))
         
-        tk.Label(cred_frame, text="Credenciales:", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
+        tk.Label(self.cred_frame, text="Credenciales:", font=("Arial", 10, "bold"), bg='white').pack(anchor=tk.W)
         
         # Frame para radio buttons y campos
-        cred_options_frame = tk.Frame(cred_frame, bg='white')
+        cred_options_frame = tk.Frame(self.cred_frame, bg='white')
         cred_options_frame.pack(fill=tk.X, pady=(5, 0))
         
         # Usuario y contraseña
@@ -221,17 +217,22 @@ class AuthDialog:
         saved_radio.pack(anchor=tk.W)
         
         self.saved_creds_var = tk.StringVar()
-        saved_combo = ttk.Combobox(saved_frame, textvariable=self.saved_creds_var, 
+        self.saved_combo = ttk.Combobox(saved_frame, textvariable=self.saved_creds_var, 
                                   values=list(self.saved_credentials.keys()), 
                                   state="readonly", width=18)
-        saved_combo.pack(anchor=tk.W, pady=(2, 0))
+        self.saved_combo.pack(anchor=tk.W, pady=(2, 0))
+        # Al seleccionar credencial guardada, rellenar automáticamente el Hostname
+        try:
+            self.saved_combo.bind("<<ComboboxSelected>>", self.on_saved_credential_selected)
+        except Exception:
+            pass
         
         # Métodos de autenticación
-        auth_frame = tk.LabelFrame(main_config_frame, text="Métodos de Autenticación", 
+        self.auth_frame = tk.LabelFrame(self.main_config_frame, text="Métodos de Autenticación", 
                                   font=("Arial", 10, "bold"), bg='white')
-        auth_frame.pack(fill=tk.X, pady=(10, 0))
+        self.auth_frame.pack(fill=tk.X, pady=(10, 0))
         
-        auth_inner = tk.Frame(auth_frame, bg='white')
+        auth_inner = tk.Frame(self.auth_frame, bg='white')
         auth_inner.pack(fill=tk.X, padx=10, pady=8)
         
         self.auth_methods = {
@@ -318,8 +319,8 @@ class AuthDialog:
             self.baudrate_label.pack_forget()
             self.baudrate_entry.pack_forget()
             # Mostrar campo de hostname y puerto de red
-            if not self.port_frame.winfo_ismapped():
-                self.port_frame.pack(fill=tk.X, pady=(0, 10))
+            self.port_frame.pack_forget()
+            self.port_frame.pack(fill=tk.X, pady=(0, 10), before=self.cred_frame)
             if not self.hostname_frame.winfo_ismapped():
                 self.hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         elif protocol == "Telnet":
@@ -330,8 +331,8 @@ class AuthDialog:
             self.baudrate_label.pack_forget()
             self.baudrate_entry.pack_forget()
             # Mostrar campo de hostname y puerto de red
-            if not self.port_frame.winfo_ismapped():
-                self.port_frame.pack(fill=tk.X, pady=(0, 10))
+            self.port_frame.pack_forget()
+            self.port_frame.pack(fill=tk.X, pady=(0, 10), before=self.cred_frame)
             if not self.hostname_frame.winfo_ismapped():
                 self.hostname_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
         elif protocol == "Serial":
@@ -346,6 +347,42 @@ class AuthDialog:
                 self.port_frame.pack_forget()
             if self.hostname_frame.winfo_ismapped():
                 self.hostname_frame.pack_forget()
+
+    def on_saved_credential_selected(self, event=None):
+        """Al elegir una credencial guardada, aplicar protocolo, host y puerto."""
+        try:
+            sel = self.saved_creds_var.get()
+            cred = self.saved_credentials.get(sel, {})
+            if not cred:
+                return
+            proto = cred.get('protocol', self.protocol_var.get())
+            # Aplicar protocolo y ajustar UI
+            if proto:
+                self.protocol_var.set(proto)
+                try:
+                    self.on_protocol_change()
+                except Exception:
+                    pass
+            # Host y puertos según protocolo
+            if proto == 'Serial':
+                sp = cred.get('port', '')
+                if sp:
+                    try:
+                        self.serial_port_var.set(sp)
+                    except Exception:
+                        pass
+                bd = cred.get('baudrate', '')
+                if bd:
+                    self.baudrate_var.set(str(bd))
+            else:
+                host = cred.get('hostname', '')
+                if host:
+                    self.hostname_var.set(host)
+                p = cred.get('port', '')
+                if p:
+                    self.port_var.set(str(p))
+        except Exception:
+            pass
 
     def toggle_credentials(self):
         """Alternar entre usuario y credenciales guardadas"""
@@ -365,30 +402,50 @@ class AuthDialog:
         return {}
         
     def save_credentials(self):
-        """Guardar las credenciales actuales"""
-        if not self.username_var.get():
-            messagebox.showwarning("Error", "Por favor ingresa un nombre de usuario")
+        """Guardar credenciales incluyendo puerto y permitiendo usuario/contraseña vacíos."""
+        protocol = self.protocol_var.get()
+        # Validación mínima: host para SSH/Telnet; puerto serial para Serial
+        if protocol != 'Serial' and not self.hostname_var.get():
+            messagebox.showwarning("Error", "Por favor ingresa el hostname")
             return
-            
-        cred_name = f"{self.hostname_var.get()}_{self.username_var.get()}"
-        
+        if protocol == 'Serial' and not self.serial_port_var.get():
+            messagebox.showwarning("Error", "Por favor ingresa el puerto serial (ej. COM7)")
+            return
+
+        # Clave legible y única: host:puerto (o COM + baudrate para Serial), o host_usuario si hay usuario
+        hostname = self.hostname_var.get().strip()
+        if protocol == 'Serial':
+            port_value = self.serial_port_var.get().strip()
+        else:
+            # Mantener tipo int para puertos de red
+            port_value = self.port_var.get()
+        username = self.username_var.get().strip()
+        cred_name = f"{hostname}_{username}" if username else (f"{hostname}:{port_value}" if hostname else f"{protocol}:{port_value}")
+
         credentials = {
-            'hostname': self.hostname_var.get(),
-            'port': self.port_var.get(),
-            'protocol': self.protocol_var.get(),
-            'username': self.username_var.get(),
+            'hostname': hostname,
+            'port': port_value,
+            'protocol': protocol,
+            'username': username,
             'password': self.password_var.get(),
             'auth_methods': {k: v.get() for k, v in self.auth_methods.items()},
             'fast_mode': self.fast_mode_var.get(),
-            'vendor_hint': self.vendor_hint_var.get(),
-            'baudrate': self.baudrate_var.get() if self.protocol_var.get() == 'Serial' else ''
+            # Traer running-config en el batch inicial para evitar una segunda pasada
+            'prefetch_running_config': True,
+            'baudrate': self.baudrate_var.get() if protocol == 'Serial' else ''
         }
-        
+
         self.saved_credentials[cred_name] = credentials
-        
+
         try:
             with open('saved_credentials.json', 'w') as f:
                 json.dump(self.saved_credentials, f, indent=2)
+            # Actualizar combo sin reiniciar el diálogo
+            try:
+                self.saved_combo['values'] = list(self.saved_credentials.keys())
+                self.saved_creds_var.set(cred_name)
+            except Exception:
+                pass
             messagebox.showinfo("Éxito", "Credenciales guardadas correctamente")
         except Exception as e:
             messagebox.showerror("Error", f"Error al guardar: {str(e)}")
@@ -407,10 +464,11 @@ class AuthDialog:
                 return
             
         if self.use_username.get():
-            if not self.username_var.get():
+            # Permitir Telnet sin usuario/contraseña
+            if protocol != "Telnet" and not self.username_var.get():
                 messagebox.showerror("Error", "Por favor ingresa el nombre de usuario")
                 return
-            if not self.password_var.get():
+            if protocol != "Telnet" and not self.password_var.get():
                 messagebox.showerror("Error", "Por favor ingresa la contraseña")
                 return
             
@@ -430,8 +488,10 @@ class AuthDialog:
             'auth_methods': {k: v.get() for k, v in self.auth_methods.items()},
             'session_options': {k: v.get() for k, v in self.session_options.items()},
             'fast_mode': self.fast_mode_var.get(),
-            'vendor_hint': (self.vendor_hint_var.get() or 'Auto'),
-            'baudrate': self.baudrate_var.get() if protocol == 'Serial' else ''
+            # Traer running-config en el batch inicial para evitar segunda pasada
+            'prefetch_running_config': True,
+            'baudrate': self.baudrate_var.get() if protocol == 'Serial' else '',
+            'verbose': self.verbose,
         }
         
         # Si usa credenciales guardadas, fusionar sin sobrescribir protocolo/objetivo actual
@@ -445,15 +505,21 @@ class AuthDialog:
                 selected_baudrate = self.connection_data.get('baudrate', '')
 
                 # Copiar solo campos de credenciales/ajustes no críticos
-                for key in ('username', 'password', 'auth_methods', 'session_options', 'fast_mode', 'vendor_hint'):
+                for key in ('username', 'password', 'auth_methods', 'session_options', 'fast_mode', 'prefetch_running_config'):
                     if key in saved_cred:
-                        self.connection_data[key] = saved_cred[key]
+                        if key == 'prefetch_running_config':
+                            # No bajar el valor por defecto (True). Solo activar si credencial lo tenía en True.
+                            if bool(saved_cred.get(key)):
+                                self.connection_data[key] = True
+                        else:
+                            self.connection_data[key] = saved_cred[key]
 
                 # Restaurar siempre la selección actual del usuario para evitar inconsistencias
                 self.connection_data['protocol'] = selected_protocol
                 self.connection_data['hostname'] = selected_hostname if selected_protocol != 'Serial' else ''
                 self.connection_data['port'] = selected_port
                 self.connection_data['baudrate'] = selected_baudrate if selected_protocol == 'Serial' else ''
+                # Mantener el valor de prefetch según credenciales guardadas o por defecto (True)
         
         # Mostrar ventana de análisis
         self.show_analysis_window()
@@ -535,43 +601,56 @@ class AuthDialog:
         try:
             # Crear analizador
             analyzer = RouterAnalyzer(self.connection_data)
+            fast = bool(self.connection_data.get('fast_mode', True))
+            def _sleep_short(default_s: float = 0.2):
+                try:
+                    if fast:
+                        time.sleep(0.02)
+                    else:
+                        time.sleep(default_s)
+                except Exception:
+                    pass
             
             # Mostrar inicio del análisis
             listbox.insert(tk.END, "🚀 Iniciando análisis del router...")
             window.update()
-            time.sleep(1)
+            _sleep_short()
             
             # Simular conexión con tiempos realistas
             if analyzer.connect():
                 listbox.insert(tk.END, "✅ Conectado al router exitosamente")
                 window.update()
-                time.sleep(1)
-                
-                # Mostrar progreso de comandos
+                _sleep_short()
+
+                # Detectar fabricante inmediatamente (conect().vendor_hint ya está establecido)
+                listbox.insert(tk.END, "🔎 Detectando fabricante...")
+                window.update()
+                _sleep_short()
+                vendor_label = (analyzer.vendor or self.connection_data.get('vendor_hint') or 'Desconocido').upper()
+                listbox.insert(tk.END, f"📊 Dispositivo detectado: {vendor_label}")
+                window.update()
+                _sleep_short()
+
+                # Mostrar progreso de comandos específicos del fabricante
                 listbox.insert(tk.END, "📋 Ejecutando comandos de análisis...")
                 window.update()
-                time.sleep(1)
-                
-                # Ejecutar análisis real
+                _sleep_short()
+
+                # Ejecutar análisis real (usará vendor_hint para comandos del vendor)
                 analysis_data = analyzer.analyze_router()
                 parsed_data = analyzer.parse_analysis_data(analysis_data)
                 
-                # Mostrar resultados
-                listbox.insert(tk.END, f"📊 Dispositivo detectado: {analysis_data.get('device_type', 'Desconocido').upper()}")
-                window.update()
-                time.sleep(1)
-                
                 listbox.insert(tk.END, f"📈 Comandos ejecutados: {len(analysis_data.get('commands_executed', []))}")
                 window.update()
-                time.sleep(1)
+                _sleep_short()
                 
                 listbox.insert(tk.END, f"🔍 Interfaces encontradas: {len(parsed_data.get('interfaces', []))}")
                 window.update()
-                time.sleep(1)
+                _sleep_short()
                 
                 listbox.insert(tk.END, f"🌐 VRFs encontradas: {len(parsed_data.get('vrfs', []))}")
                 window.update()
-                time.sleep(1)
+                _sleep_short()
                 
                 # Análisis completado
                 listbox.insert(tk.END, "")
@@ -589,27 +668,33 @@ class AuthDialog:
                     pass
                 
                 # Cerrar ventana de análisis después de 1 segundo
-                window.after(1000, lambda: self.close_analysis_window(window))
+                window.after(300, lambda: self.close_analysis_window(window))
                 
             else:
                 listbox.insert(tk.END, "❌ Error al conectar al router")
                 window.update()
-                time.sleep(2)
+                try:
+                    time.sleep(0.5 if fast else 1.5)
+                except Exception:
+                    pass
                 try:
                     progress_bar.stop()
                 except Exception:
                     pass
-                window.after(2000, lambda: self.close_analysis_window(window))
+                window.after(500 if fast else 1500, lambda: self.close_analysis_window(window))
                 
         except Exception as e:
             listbox.insert(tk.END, f"❌ Error: {str(e)}")
             window.update()
-            time.sleep(2)
+            try:
+                time.sleep(0.5 if fast else 1.5)
+            except Exception:
+                pass
             try:
                 progress_bar.stop()
             except Exception:
                 pass
-            window.after(2000, lambda: self.close_analysis_window(window))
+            window.after(500 if fast else 1500, lambda: self.close_analysis_window(window))
     
     def close_analysis_window(self, window):
         """Cerrar ventana de análisis y continuar"""
@@ -624,5 +709,9 @@ class AuthDialog:
     def show(self):
         """Mostrar el diálogo y retornar los datos de conexión"""
         self.root.mainloop()
-        self.root.destroy()
+        try:
+            if self.root:
+                self.root.destroy()
+        except tk.TclError:
+            pass
         return self.connection_data

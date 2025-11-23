@@ -43,3 +43,41 @@ print('device_info:', parsed.get('device_info'))
 print('interfaces_count:', len(parsed.get('interfaces', [])))
 print('neighbors:', parsed.get('neighbors'))
 print('routing_protocols:', parsed.get('routing_protocols'))
+
+# ---- Huawei sample test ----
+from modules.router_analyzer.parsers import parse_huawei_version, parse_huawei_ip_interface_brief
+
+huawei_version_sample = (
+    'Huawei Versatile Routing Platform Software\n'
+    'Version: V200R003C00\n'
+    'Board Type : AR1220\n'
+    'Router uptime is 1 week, 2 days, 03 hours, 12 minutes\n'
+    'SDRAM Memory Size : 512 M bytes\n'
+    'Flash 0 Memory Size : 64 M bytes\n'
+    'Serial No.: 210231A12345ABCD\n'
+)
+
+huawei_if_brief_sample = (
+    'Interface                         IP Address/Mask      Physical  Protocol\n'
+    'GigabitEthernet0/0/0             192.168.1.1/24       up        up\n'
+    'GigabitEthernet0/0/1             0.0.0.0/0            down      down\n'
+    'Vlanif10                         10.10.10.1/24        up        up\n'
+)
+
+print('\n--- Huawei parse smoke test ---')
+print('device_info:', parse_huawei_version(huawei_version_sample))
+print('interfaces:', parse_huawei_ip_interface_brief(huawei_if_brief_sample))
+
+# ---- Prompt vendor detection smoke tests ----
+from modules.router_analyzer.connections import _vendor_from_prompt
+
+print('\n--- Prompt vendor detection smoke tests ---')
+samples = {
+    'cisco_enable': 'Router#',
+    'cisco_exec': 'Switch>',
+    'juniper_operational': 'lab@mx480>',
+    'huawei_angle': '<Huawei>',
+    'huawei_square': '[Huawei]',
+}
+for name, sample in samples.items():
+    print(name, '->', _vendor_from_prompt(sample))

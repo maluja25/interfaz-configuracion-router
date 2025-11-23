@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import re
 from typing import Dict, List, Any, Optional, Tuple
+from .ospf_module import OspfModuleWindow, OspfModulePanel
+from .bgp_module import BgpModuleWindow, BgpModulePanel
 
 # Constantes para la configuración de protocolos de enrutamiento (solo OSPF y BGP)
 PROTOCOL_OSPF = 'ospf'
@@ -45,6 +47,8 @@ class RoutingConfigFrame(tk.Frame):
         """
         super().__init__(parent)
         self.shared_data = shared_data
+        # Modo simplificado: mostrar solo dos opciones (OSPF/BGP) y abrir detalles al hacer clic
+        self.simple_protocols_ui: bool = True
         
         # Inicializar estructura de datos para protocolos de enrutamiento si no existe
         if 'routing_protocols' not in self.shared_data:
@@ -117,42 +121,50 @@ class RoutingConfigFrame(tk.Frame):
         self.create_protocols_tab(protocols_tab)
         self.create_static_routes_tab(static_routes_tab)
 
-        self.create_preview_section(main_frame)
+        # Eliminamos la sección de vista previa de comandos
         self.refresh_routes_table() # Cargar rutas existentes al iniciar
         self.update_preview()
         
     def create_protocols_tab(self, parent: ttk.Frame) -> None:
-        """Crea el contenido de la pestaña de Protocolos.
-        
-        Organiza los protocolos de enrutamiento en una cuadrícula de tarjetas,
-        cada una con información y controles para un protocolo específico.
-        
-        Args:
-            parent: Frame padre donde se colocarán los elementos
-        """
-        protocols_frame = ttk.Frame(parent, style="Card.TFrame")
-        protocols_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        """Crea la pestaña de Protocolos con layout dividido izquierda/derecha.
 
-        # Definición de los protocolos disponibles con su información (solo OSPF y BGP)
+        Izquierda: tarjetas para OSPF y BGP con botones "Ver" y "Configurar".
+        Derecha: panel dinámico donde se renderiza el contenido de Ver/Config.
+        """
+        # Contenedor principal de la pestaña
+        container = ttk.Frame(parent, style="Card.TFrame", padding=(10, 10))
+        container.pack(fill=tk.BOTH, expand=True)
+
+        # Panel izquierdo (navegación de protocolos)
+        left_panel = tk.Frame(container, bg=COLOR_WHITE)
+        left_panel.pack(side="left", fill=tk.Y, padx=(10, 12), pady=10)
+        # Ajustar un ancho fijo y evitar que se reduzca para mantener el layout centrado
+        left_panel.configure(width=420)
+        left_panel.pack_propagate(False)
+
+        # Panel derecho (contenido dinámico)
+        self.details_panel = tk.Frame(
+            container,
+            bg=COLOR_WHITE,
+            bd=1,
+            relief="solid",
+            highlightbackground=COLOR_CARD_BORDER,
+            highlightthickness=1,
+        )
+        self.details_panel.pack(side="left", fill=tk.BOTH, expand=True, padx=(0, 10), pady=10)
+
+        # Construir tarjetas en el panel izquierdo (apiladas verticalmente)
         protocols = [
             ("OSPF (Open Shortest Path First)", "Protocolo de estado de enlace para redes internas", PROTOCOL_OSPF),
-            ("BGP (Border Gateway Protocol)", "Protocolo para enrutamiento entre dominios", PROTOCOL_BGP)
+            ("BGP (Border Gateway Protocol)", "Protocolo para enrutamiento entre dominios", PROTOCOL_BGP),
         ]
 
-        # Calcular el número de filas necesarias para la cuadrícula
-        num_rows = (len(protocols) + 1) // 2
+        for name, desc, protocol_id in protocols:
+            card = self.create_protocol_card(left_panel, name, desc, protocol_id)
+            card.pack(fill="x", padx=12, pady=8)
 
-        # Crear tarjetas en dos columnas
-        for i, (name, desc, protocol_id) in enumerate(protocols):
-            row, col = divmod(i, 2)  # Distribuir en 2 columnas
-            card = self.create_protocol_card(protocols_frame, name, desc, protocol_id)
-            card.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-
-        # Configurar el comportamiento de redimensionamiento de la cuadrícula
-        protocols_frame.grid_columnconfigure(0, weight=1)
-        protocols_frame.grid_columnconfigure(1, weight=1)
-        for i in range(num_rows):
-            protocols_frame.grid_rowconfigure(i, weight=1)
+        # Placeholder inicial en el panel derecho
+        self._render_right_placeholder()
 
     def create_protocol_card(self, parent: tk.Widget, name: str, description: str, protocol_id: str) -> tk.Frame:
         """Crea una tarjeta individual para un protocolo de enrutamiento.
@@ -194,16 +206,25 @@ class RoutingConfigFrame(tk.Frame):
         
         # Crear la sección de descripción
         desc_label = self._create_description_section(content_frame, description)
+
+        # En modo simplificado, no mostrar switch ni textarea; solo botón de detalles
+        if not self.simple_protocols_ui:
+            self._create_toggle_section(content_frame, protocol_name_short, protocol_id)
+            separator = ttk.Separator(content_frame, orient='horizontal')
+            separator.pack(fill='x', pady=10)
         
-        # Crear la sección del interruptor con estilo mejorado
-        self._create_toggle_section(content_frame, protocol_name_short, protocol_id)
-        
-        # Separador antes del área de configuración
-        separator = ttk.Separator(content_frame, orient='horizontal')
-        separator.pack(fill='x', pady=10)
-        
-        # Crear la sección de configuración
         self._create_config_section(content_frame, protocol_name_short, protocol_id)
+
+        # Permitir abrir detalles al hacer clic en la tarjeta completa
+        def _bind_open_details(widget: tk.Widget):
+            try:
+                widget.bind("<Button-1>", lambda e, p=protocol_id: self._open_in_panel_or_window(p, show_details=True))
+                widget.config(cursor="hand2")
+            except Exception:
+                pass
+        _bind_open_details(card_frame)
+        for ch in card_frame.winfo_children():
+            _bind_open_details(ch)
         
         return card_frame
 
@@ -440,6 +461,29 @@ class RoutingConfigFrame(tk.Frame):
             protocol_name_short: Nombre corto del protocolo
             protocol_id: Identificador del protocolo
         """
+        # En modo simplificado, mostrar solo un botón grande de detalles
+        if self.simple_protocols_ui:
+            simple_frame = tk.Frame(parent, bg=COLOR_WHITE)
+            simple_frame.pack(fill="x", pady=(5, 0))
+
+            # Dos botones: Ver (detalles) y Configurar (editor)
+            view_btn = ttk.Button(
+                simple_frame,
+                text="Ver",
+                command=lambda p=protocol_id: self._open_in_panel_or_window(p, show_details=True),
+                style="Primary.TButton",
+            )
+            view_btn.pack(side="left")
+
+            config_btn = ttk.Button(
+                simple_frame,
+                text="Configurar",
+                command=lambda p=protocol_id: self._open_in_panel_or_window(p, show_details=False),
+                style="Secondary.TButton",
+            )
+            config_btn.pack(side="left", padx=(10, 0))
+            return
+
         # Frame para la configuración del protocolo con borde y fondo para destacarlo
         config_frame = tk.Frame(parent, bg=COLOR_WHITE, bd=1, relief="solid", 
                               highlightbackground="#e0e0e0", highlightthickness=1)
@@ -489,22 +533,31 @@ class RoutingConfigFrame(tk.Frame):
         # Frame para los botones
         button_frame = tk.Frame(config_content, bg=COLOR_WHITE)
         button_frame.pack(fill="x", pady=(10, 0))
-        
+
+        # Botón para ver detalles del protocolo
+        view_btn = ttk.Button(
+            button_frame,
+            text="Ver Detalles",
+            command=lambda p=protocol_id: self.open_protocol_details(p),
+            style="Secondary.TButton",
+        )
+        view_btn.pack(side="left")
+
         # Botón para limpiar la configuración
         clear_btn = ttk.Button(
-            button_frame, 
-            text="Limpiar", 
+            button_frame,
+            text="Limpiar",
             command=lambda t=config_text: t.delete("1.0", tk.END),
-            style="Secondary.TButton"
+            style="Secondary.TButton",
         )
-        clear_btn.pack(side="left")
-        
+        clear_btn.pack(side="left", padx=(8, 0))
+
         # Botón para guardar la configuración
         save_btn = ttk.Button(
-            button_frame, 
-            text="Guardar Configuración", 
+            button_frame,
+            text="Guardar Configuración",
             command=lambda p=protocol_id: self.save_protocol_config(p),
-            style="Primary.TButton"
+            style="Primary.TButton",
         )
         save_btn.pack(side="right")
         
@@ -513,7 +566,7 @@ class RoutingConfigFrame(tk.Frame):
             config_text.config(state="disabled")
             save_btn.config(state="disabled")
             clear_btn.config(state="disabled")
-        
+
     def toggle_protocol(self, protocol_id: str, status_badge: Optional[tk.Label] = None) -> None:
         """Activa o desactiva un protocolo de enrutamiento.
         
@@ -554,6 +607,184 @@ class RoutingConfigFrame(tk.Frame):
             
         except (KeyError, AttributeError) as e:
             messagebox.showerror("Error", f"Error al cambiar el estado del protocolo: {str(e)}")
+
+    def open_protocol_details(self, protocol_id: str) -> None:
+        """Abre la ventana de detalles para OSPF o BGP.
+
+        Args:
+            protocol_id: Identificador del protocolo ('ospf' o 'bgp')
+        """
+        try:
+            if protocol_id == PROTOCOL_OSPF:
+                OspfModuleWindow(self, self.shared_data)
+            elif protocol_id == PROTOCOL_BGP:
+                BgpModuleWindow(self, self.shared_data)
+            else:
+                messagebox.showwarning("Protocolo", "Protocolo no soportado para detalles.")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir detalles: {e}")
+
+    def _open_in_panel_or_window(self, protocol_id: str, show_details: bool) -> None:
+        """Abre contenido de Ver/Config en el panel derecho si existe; de lo contrario, ventana."""
+        try:
+            if hasattr(self, 'details_panel') and self.details_panel.winfo_exists():
+                if show_details:
+                    self._show_protocol_details_in_panel(protocol_id)
+                else:
+                    self._show_protocol_config_in_panel(protocol_id)
+            else:
+                if show_details:
+                    self.open_protocol_details(protocol_id)
+                else:
+                    self.open_protocol_config_editor(protocol_id)
+        except Exception as e:
+            messagebox.showerror("Error", f"Acción no disponible: {e}")
+
+    def _clear_details_panel(self) -> None:
+        try:
+            for child in self.details_panel.winfo_children():
+                child.destroy()
+        except Exception:
+            pass
+
+    def _render_right_placeholder(self) -> None:
+        self._clear_details_panel()
+        holder = tk.Frame(self.details_panel, bg=COLOR_WHITE, padx=16, pady=16)
+        holder.pack(fill=tk.BOTH, expand=True)
+        ttk.Label(holder, text="Ver/Config", font=("Arial", 13, "bold"), background=COLOR_WHITE).pack(anchor="w")
+        ttk.Label(holder, text="Selecciona \"Ver\" o \"Configurar\" desde la izquierda",
+                  background=COLOR_WHITE).pack(anchor="w", pady=(10, 0))
+
+    def _show_protocol_details_in_panel(self, protocol_id: str) -> None:
+        self._clear_details_panel()
+        try:
+            if protocol_id == PROTOCOL_OSPF:
+                view = OspfModulePanel(self.details_panel, self.shared_data)
+                view.pack(fill=tk.BOTH, expand=True)
+            elif protocol_id == PROTOCOL_BGP:
+                view = BgpModulePanel(self.details_panel, self.shared_data)
+                view.pack(fill=tk.BOTH, expand=True)
+            else:
+                self._render_right_placeholder()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo mostrar detalles: {e}")
+
+    def _show_protocol_config_in_panel(self, protocol_id: str) -> None:
+        self._clear_details_panel()
+        try:
+            container = tk.Frame(self.details_panel, bg=COLOR_WHITE, padx=16, pady=16)
+            container.pack(fill=tk.BOTH, expand=True)
+            ttk.Label(container, text=f"Configuración de {protocol_id.upper()}",
+                      font=("Arial", 13, "bold"), background=COLOR_WHITE).pack(anchor="w", pady=(0, 10))
+
+            text = scrolledtext.ScrolledText(
+                container,
+                height=18,
+                font=("Consolas", 10),
+                bd=1,
+                relief="solid",
+                padx=6,
+                pady=6,
+                bg="#fafafa",
+            )
+            text.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+
+            existing = self.shared_data.get('routing_protocols', {}).get(protocol_id, {}).get(CONFIG, '')
+            if existing:
+                text.insert("1.0", existing)
+            else:
+                text.insert("1.0", f"# Ingrese la configuración para {protocol_id.upper()} aquí\n")
+
+            btns = tk.Frame(container, bg=COLOR_WHITE)
+            btns.pack(fill=tk.X, pady=(12, 0))
+
+            def on_save():
+                cfg = text.get("1.0", tk.END).strip()
+                valid, msg = self._validate_protocol_config(protocol_id, cfg)
+                if not valid:
+                    messagebox.showwarning("Advertencia", msg)
+                    return
+                self.shared_data['routing_protocols'][protocol_id][CONFIG] = cfg
+                messagebox.showinfo("Configuración Guardada", f"Configuración de {protocol_id.upper()} guardada.")
+                self.update_preview()
+
+            ttk.Button(btns, text="Guardar", command=on_save, style="Primary.TButton").pack(side="right")
+            ttk.Button(btns, text="Limpiar", command=lambda: text.delete("1.0", tk.END), style="Secondary.TButton").pack(side="left")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir el editor: {e}")
+    
+    def open_protocol_config_editor(self, protocol_id: str) -> None:
+        """Abre un editor modal para configurar el protocolo seleccionado.
+
+        Muestra un cuadro con un área de texto para editar la configuración
+        y botones para Guardar, Limpiar y Cancelar.
+        """
+        try:
+            # Crear ventana modal
+            editor = tk.Toplevel(self)
+            editor.title(f"Configurar {protocol_id.upper()}")
+            editor.configure(bg=COLOR_WHITE)
+            editor.transient(self)
+            editor.grab_set()
+
+            # Contenedor principal
+            container = tk.Frame(editor, bg=COLOR_WHITE, padx=12, pady=12)
+            container.pack(fill=tk.BOTH, expand=True)
+
+            # Título
+            ttk.Label(container, text=f"Configuración de {protocol_id.upper()}",
+                      font=("Arial", 12, "bold"), background=COLOR_WHITE).pack(anchor="w", pady=(0, 8))
+
+            # Área de texto
+            text = scrolledtext.ScrolledText(
+                container,
+                height=12,
+                width=60,
+                font=("Consolas", 10),
+                bd=1,
+                relief="solid",
+                padx=6,
+                pady=6,
+                bg="#fafafa"
+            )
+            text.pack(fill=tk.BOTH, expand=True)
+
+            # Precargar configuración existente
+            existing = self.shared_data.get('routing_protocols', {}).get(protocol_id, {}).get(CONFIG, '')
+            if existing:
+                text.insert("1.0", existing)
+            else:
+                text.insert("1.0", f"# Ingrese la configuración para {protocol_id.upper()} aquí\n")
+
+            # Botonera
+            btns = tk.Frame(container, bg=COLOR_WHITE)
+            btns.pack(fill=tk.X, pady=(10, 0))
+
+            def on_save():
+                cfg = text.get("1.0", tk.END).strip()
+                valid, msg = self._validate_protocol_config(protocol_id, cfg)
+                if not valid:
+                    messagebox.showwarning("Advertencia", msg)
+                    return
+                self.shared_data['routing_protocols'][protocol_id][CONFIG] = cfg
+                messagebox.showinfo("Configuración Guardada", f"Configuración de {protocol_id.upper()} guardada.")
+                self.update_preview()
+                editor.destroy()
+
+            def on_clear():
+                text.delete("1.0", tk.END)
+
+            def on_cancel():
+                editor.destroy()
+
+            save_btn = ttk.Button(btns, text="Guardar", command=on_save, style="Primary.TButton")
+            save_btn.pack(side="right")
+            cancel_btn = ttk.Button(btns, text="Cancelar", command=on_cancel, style="Secondary.TButton")
+            cancel_btn.pack(side="right", padx=(8, 0))
+            clear_btn = ttk.Button(btns, text="Limpiar", command=on_clear, style="Secondary.TButton")
+            clear_btn.pack(side="left")
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo abrir el editor: {e}")
     
     def _update_config_widget_state(self, protocol_id: str, is_enabled: bool) -> None:
         """Actualiza el estado de los widgets de configuración según el estado del protocolo.
@@ -937,6 +1168,10 @@ class RoutingConfigFrame(tk.Frame):
     def _copy_commands_to_clipboard(self) -> None:
         """Copia los comandos actuales al portapapeles del sistema."""
         try:
+            # Si la vista previa no existe, no hay nada que copiar
+            if not hasattr(self, 'preview_text'):
+                messagebox.showinfo("Información", "La vista previa de comandos está deshabilitada.")
+                return
             # Obtener el contenido actual
             commands_text = self.preview_text.get(1.0, tk.END).strip()
             if not commands_text or commands_text.startswith("# No hay"):
@@ -958,6 +1193,9 @@ class RoutingConfigFrame(tk.Frame):
         enrutamiento habilitados y las rutas estáticas configuradas.
         """
         try:
+            # Si la vista previa está deshabilitada/no creada, simplemente salir
+            if not hasattr(self, 'preview_text'):
+                return
             # Habilitar edición del área de texto
             self.preview_text.config(state=tk.NORMAL)
             self.preview_text.delete(1.0, tk.END)
@@ -1038,6 +1276,19 @@ class RoutingConfigFrame(tk.Frame):
         commands = []
         
         try:
+            # Detectar vendor desde datos parseados o pista de conexión
+            vendor = ""
+            try:
+                vendor = (self.shared_data.get('parsed_data', {})
+                          .get('device_info', {})
+                          .get('vendor', '') or '').lower()
+                if not vendor:
+                    vendor = (self.shared_data.get('connection_data', {})
+                              .get('vendor_hint', '') or '').lower()
+            except Exception:
+                vendor = ""
+            is_huawei = vendor.startswith("huawei")
+
             # Verificar que existan rutas estáticas
             if 'static_routes' not in self.shared_data or not self.shared_data['static_routes']:
                 return commands
@@ -1048,9 +1299,16 @@ class RoutingConfigFrame(tk.Frame):
                 if not route.get('dest') or not route.get('mask') or not route.get('next_hop'):
                     continue
                     
-                cmd = f"ip route {route['dest']} {route['mask']} {route['next_hop']}"  
-                if route.get('distance'):
-                    cmd += f" {route['distance']}"
+                if is_huawei:
+                    # Sintaxis Huawei: ip route-static DEST MASK NEXT_HOP [preference DIST]
+                    cmd = f"ip route-static {route['dest']} {route['mask']} {route['next_hop']}"
+                    if route.get('distance'):
+                        cmd += f" preference {route['distance']}"
+                else:
+                    # Sintaxis Cisco: ip route DEST MASK NEXT_HOP [DIST]
+                    cmd = f"ip route {route['dest']} {route['mask']} {route['next_hop']}"  
+                    if route.get('distance'):
+                        cmd += f" {route['distance']}"
                 commands.append(cmd)
         except Exception as e:
             print(f"Error al generar comandos de rutas estáticas: {str(e)}")

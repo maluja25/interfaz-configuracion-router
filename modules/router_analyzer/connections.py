@@ -21,6 +21,16 @@ try:
 except Exception:
     telnet3 = None  # type: ignore
 
+# Comandos por vendor para deshabilitar paginación
+try:
+    from .vendor_commands import DISABLE_PAGING  # type: ignore
+except Exception:
+    DISABLE_PAGING = {
+        "huawei": ["screen-length 0 temporary"],
+        "cisco": ["terminal length 0"],
+        "juniper": ["set cli screen-length 0"],
+    }
+
 def _sanitize_output(text: str) -> str:
     """Limpia artefactos comunes de CLI: ANSI, paginación y backspaces.
 
@@ -47,6 +57,43 @@ def _sanitize_output(text: str) -> str:
     return text
 
 
+def _vendor_from_prompt(prompt: str) -> str:
+    """Inferencia de fabricante basada en una sola línea de prompt.
+
+    Reglas heurísticas simples:
+    - Si aparecen palabras clave ('huawei', 'vrp', 'quidway') => Huawei
+    - Si el prompt contiene 'usuario@host' con '>', '#', o '%' => Juniper
+    - Si el prompt está entre '<...>' o '[...]' => Huawei (estilo VRP)
+    - Si contiene '#', sin '@' => Cisco (modo privilegiado)
+    - Si contiene '>', sin '@' => Cisco (modo exec)
+    - En caso contrario => desconocido
+    """
+    t = _sanitize_output(prompt or "").strip()
+    if not t:
+        return "desconocido"
+    low = t.lower()
+
+    # Palabras clave explícitas
+    if ("huawei" in low) or ("vrp" in low) or ("quidway" in low):
+        return "huawei"
+
+    # Estilo Juniper: user@host>, user@host#, user@host%
+    if "@" in t and (">" in t or "#" in t or "%" in t):
+        return "juniper"
+
+    # Estilo Huawei VRP: <Huawei> o [Huawei] (o cualquier nombre entre <> o [])
+    if re.search(r"[<\[][^>\]]+[>\]]", t):
+        return "huawei"
+
+    # Cisco típico: '#' privilegios, '>' modo exec (sin '@')
+    if "#" in t and "@" not in t:
+        return "cisco"
+    if ">" in t and "@" not in t:
+        return "cisco"
+
+    return "desconocido"
+
+
 # -------- Clases de conexión con manejo de paginación ---------
 class SSHConnection:
     def __init__(self, connection_data: Dict[str, Any]):
@@ -57,22 +104,22 @@ class SSHConnection:
         self.password = connection_data.get("password", "")
         self.fast = bool(connection_data.get("fast_mode"))
         self.paging_disabled = bool(connection_data.get("paging_disabled"))
+        self.verbose = bool(connection_data.get("verbose"))
+        self.vendor = (connection_data.get("vendor_hint") or "").lower()
 
     def _disable_paging_once(self, client: Any) -> None:
         if self.paging_disabled:
             return
         try:
-            # Huawei: deshabilitar paginación en VTY; ignorar errores
-            stdin, stdout, stderr = client.exec_command("screen-length 0 temporary", timeout=3 if self.fast else 5)
-            _ = stdout.read().decode(errors="ignore")
-            err = stderr.read().decode(errors="ignore").lower()
-            # Cisco opcional: terminal length 0
-            # Ejecutamos también para mayor compatibilidad; ignorar errores
-            stdin2, stdout2, stderr2 = client.exec_command("terminal length 0", timeout=3 if self.fast else 5)
-            _ = stdout2.read().decode(errors="ignore")
-            err2 = stderr2.read().decode(errors="ignore").lower()
-            # Ignorar mensajes como "must be VTY" o "VTY"
-            _ = err, err2
+            vendor = (self.vendor or self.connection_data.get("vendor_hint") or "").lower()
+            cmds = DISABLE_PAGING.get(vendor, []) if vendor else []
+            for p_cmd in cmds:
+                try:
+                    _in, _out, _err = client.exec_command(p_cmd, timeout=3 if self.fast else 5)
+                    _ = _out.read().decode(errors="ignore")
+                    _ = _err.read().decode(errors="ignore")
+                except Exception:
+                    pass
         except Exception:
             pass
         self.paging_disabled = True
@@ -82,13 +129,14 @@ class SSHConnection:
         if not self.host or paramiko is None:
             return ""
         try:
-            cmd_timeout = 3 if self.fast else 5
+            cmd_timeout = 1.8 if self.fast else 3
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             client.connect(self.host, port=self.port, username=self.username or None, password=self.password or None,
                            look_for_keys=False, allow_agent=False, timeout=cmd_timeout)
-            # Deshabilitar paginación una sola vez por sesión
-            self._disable_paging_once(client)
+            # Deshabilitar paginación solo si es necesario (comandos largos)
+            if bool(self.connection_data.get("need_paging_disabled")):
+                self._disable_paging_once(client)
             # Ejecutar comando
             stdin, stdout, stderr = client.exec_command(cmd, timeout=cmd_timeout)
             out = stdout.read().decode(errors="ignore") + stderr.read().decode(errors="ignore")
@@ -97,6 +145,149 @@ class SSHConnection:
         except Exception as e:
             print(f"[SSH] Error ejecutando '{cmd}': {e}")
             return ""
+
+    def run_batch(self, commands: List[str]) -> List[str]:
+        """Ejecuta múltiples comandos reutilizando una sola sesión SSH.
+
+        Minimiza handshakes y reduce la latencia total.
+        """
+        outputs: List[str] = []
+        if not self.host or paramiko is None:
+            return outputs
+        try:
+            # Establecer cliente y abrir shell interactivo para batch
+            cmd_timeout = 4 if self.fast else 6
+            client = paramiko.SSHClient()
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.connect(self.host, port=self.port, username=self.username or None, password=self.password or None,
+                           look_for_keys=False, allow_agent=False, timeout=cmd_timeout)
+
+            chan = client.invoke_shell()
+            # Pequeña espera para recibir prompt inicial
+            time.sleep(0.20 if self.fast else 0.30)
+
+            def _looks_like_prompt(line: str) -> bool:
+                t = (line or "").strip()
+                if not t:
+                    return False
+                if re.search(r"[<\[][^^\]>]+[>\]]\s*$", t):
+                    return True
+                if ("@" in t) and (t.endswith("#") or t.endswith(">") or t.endswith("%")):
+                    return True
+                if (t.endswith("#") or t.endswith(">")) and ("@" not in t):
+                    return True
+                return False
+
+            def _read_until_idle(idle_window: float, hard_timeout: float) -> str:
+                start = time.time()
+                last = start
+                buf = ""
+                carry = ""
+                while True:
+                    now = time.time()
+                    if (now - start) > hard_timeout:
+                        break
+                    if (now - last) > idle_window:
+                        break
+                    try:
+                        if chan.recv_ready():
+                            part = chan.recv(512).decode(errors="ignore")
+                        else:
+                            part = ""
+                    except Exception:
+                        part = ""
+                    if part:
+                        last = now
+                        low = part.lower()
+                        if "--more--" in low or " ---- more ---- " in low or "---- more ----" in low:
+                            try:
+                                chan.send(" ")
+                            except Exception:
+                                pass
+                            time.sleep(0.08 if self.fast else 0.12)
+                            part = part.replace("--More--", "").replace("--more--", "").replace("---- More ----", "")
+                        buf += part
+                        carry += part
+                        while "\n" in carry:
+                            line, carry = carry.split("\n", 1)
+                            if self.verbose:
+                                print(f"[SSH] {line}")
+                    else:
+                        time.sleep(0.06 if self.fast else 0.1)
+                if carry and self.verbose:
+                    print(f"[SSH] {carry}")
+                return buf
+
+            def _strip_echo_and_prompt(text: str, cmd: str) -> str:
+                t = text.replace("\r", "")
+                lines = t.splitlines()
+                c = (cmd or "").strip().lower()
+                out_lines: List[str] = []
+                skipped_echo = False
+                for ln in lines:
+                    if not skipped_echo and c and ln.strip().lower().startswith(c):
+                        skipped_echo = True
+                        continue
+                    out_lines.append(ln)
+                while out_lines and not out_lines[-1].strip():
+                    out_lines.pop()
+                if out_lines and _looks_like_prompt(out_lines[-1]):
+                    out_lines.pop()
+                return "\n".join(out_lines)
+
+            def _disable_paging_shell() -> None:
+                if self.paging_disabled:
+                    return
+                try:
+                    vendor = (self.vendor or self.connection_data.get("vendor_hint") or "").lower()
+                    cmds = DISABLE_PAGING.get(vendor, []) if vendor else []
+                    for p_cmd in cmds:
+                        try:
+                            chan.send(p_cmd + "\n")
+                            time.sleep(0.18 if self.fast else 0.28)
+                            _ = _read_until_idle(idle_window=0.6 if self.fast else 0.8, hard_timeout=1.2 if self.fast else 1.6)
+                        except Exception:
+                            pass
+                    # Drenar restos
+                    _ = _read_until_idle(idle_window=0.5 if self.fast else 0.7, hard_timeout=1.0 if self.fast else 1.2)
+                except Exception:
+                    pass
+                self.paging_disabled = True
+                self.connection_data["paging_disabled"] = True
+
+            # Deshabilitar paginación si hay comandos largos o está solicitado
+            long_in_batch = any(any(t in (c or "").lower() for t in ("running-config", "current-configuration", "show configuration")) for c in commands)
+            if bool(self.connection_data.get("need_paging_disabled")) or long_in_batch:
+                _disable_paging_shell()
+
+            # Ejecutar comandos en el shell
+            for cmd in commands:
+                try:
+                    chan.send("\n")
+                    time.sleep(0.10 if self.fast else 0.15)
+                    chan.send(cmd + "\n")
+                    time.sleep(0.12 if self.fast else 0.2)
+                    idle = 0.8 if self.fast else 1.1
+                    is_long = any(s in (cmd or "").lower() for s in ("running-config", "current-configuration", "show configuration"))
+                    hard = ((16.0 if self.fast else 20.0) if is_long else (8.0 if self.fast else 10.0))
+                    raw = _read_until_idle(idle_window=idle, hard_timeout=hard)
+                    outputs.append(_strip_echo_and_prompt(_sanitize_output(raw), cmd))
+                except Exception as e:
+                    print(f"[SSH] Error ejecutando '{cmd}' en batch: {e}")
+                    outputs.append("")
+
+            try:
+                chan.close()
+            except Exception:
+                pass
+            try:
+                client.close()
+            except Exception:
+                pass
+            return outputs
+        except Exception as e:
+            print(f"[SSH] Error en run_batch: {e}")
+            return outputs
 
 
 class TelnetConnection:
@@ -109,6 +300,7 @@ class TelnetConnection:
         self.fast = bool(connection_data.get("fast_mode"))
         self.paging_disabled = bool(connection_data.get("paging_disabled"))
         self.vendor = vendor.lower() if vendor else ""
+        self.verbose = bool(connection_data.get("verbose"))
 
     async def _read_for(self, reader: Any, seconds: float = 1.0) -> str:
         end = time.monotonic() + seconds
@@ -128,18 +320,88 @@ class TelnetConnection:
         if self.paging_disabled:
             return
         try:
-            # Huawei: VTY
-            writer.write("screen-length 0 temporary\r")
-            await asyncio.sleep(0.15 if self.fast else 0.25)
-            _ = await self._read_for(reader, 0.6 if self.fast else 0.8)
-            # Cisco opcional
-            writer.write("terminal length 0\r")
-            await asyncio.sleep(0.15 if self.fast else 0.25)
-            _ = await self._read_for(reader, 0.6 if self.fast else 0.8)
+            ven = self.vendor or (self.connection_data.get("vendor_hint") or "").lower()
+            cmds = DISABLE_PAGING.get(ven, []) if ven else []
+            for p_cmd in cmds:
+                try:
+                    writer.write(p_cmd + "\r\n")
+                    await asyncio.sleep(0.18 if self.fast else 0.28)
+                    _ = await self._read_for(reader, 0.9 if self.fast else 1.2)
+                except Exception:
+                    pass
+            # Drenar posibles restos para que no contaminen el siguiente comando
+            _ = await self._read_for(reader, 0.5 if self.fast else 0.7)
         except Exception:
             pass
         self.paging_disabled = True
         self.connection_data["paging_disabled"] = True
+
+    def _looks_like_prompt(self, line: str) -> bool:
+        t = (line or "").strip()
+        if not t:
+            return False
+        if re.search(r"[<\[][^^\]>]+[>\]]\s*$", t):
+            return True
+        if ("@" in t) and (t.endswith("#") or t.endswith(">") or t.endswith("%")):
+            return True
+        if (t.endswith("#") or t.endswith(">")) and ("@" not in t):
+            return True
+        return False
+
+    async def _read_until_idle(self, reader: Any, writer: Any, idle_window: float, hard_timeout: float) -> str:
+        start = time.monotonic()
+        last = start
+        buf = ""
+        carry = ""
+        while True:
+            if (time.monotonic() - start) > hard_timeout:
+                break
+            if (time.monotonic() - last) > idle_window:
+                break
+            try:
+                part = await asyncio.wait_for(reader.read(512), timeout=0.25)
+            except Exception:
+                part = ""
+            if part:
+                last = time.monotonic()
+                low = part.lower()
+                if "--more--" in low or " ---- more ---- " in low or "---- more ----" in low:
+                    try:
+                        writer.write(" ")
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.08 if self.fast else 0.12)
+                    part = part.replace("--More--", "").replace("--more--", "").replace("---- More ----", "")
+                buf += part
+                carry += part
+                while "\n" in carry:
+                    line, carry = carry.split("\n", 1)
+                    if self.verbose:
+                        print(f"[Telnet3] {line}")
+            else:
+                await asyncio.sleep(0.06 if self.fast else 0.1)
+        if carry and self.verbose:
+            print(f"[Telnet3] {carry}")
+        return buf
+
+    def _strip_echo_and_prompt(self, text: str, cmd: str) -> str:
+        t = text.replace("\r", "")
+        lines = t.splitlines()
+        # quitar eco del comando
+        c = (cmd or "").strip().lower()
+        out_lines: List[str] = []
+        skipped_echo = False
+        for ln in lines:
+            if not skipped_echo and c and ln.strip().lower().startswith(c):
+                skipped_echo = True
+                continue
+            out_lines.append(ln)
+        # quitar prompt final si lo hay
+        while out_lines and not out_lines[-1].strip():
+            out_lines.pop()
+        if out_lines and self._looks_like_prompt(out_lines[-1]):
+            out_lines.pop()
+        return "\n".join(out_lines)
 
     async def _run_async(self, cmd: str) -> str:
         if not self.host or telnet3 is None:
@@ -147,94 +409,76 @@ class TelnetConnection:
         reader, writer = await telnet3.open_connection(host=self.host, port=self.port, encoding="utf8", shell=None)
 
         # Autenticación si el servidor lo solicita
-        banner = await self._read_for(reader, 0.8)
+        banner = await self._read_for(reader, 0.6 if self.fast else 0.7)
         low = banner.lower()
         if any(x in low for x in ("username:", "user name:", "login:")):
             if not self.username:
-                print("[Telnet3] Autenticación requerida, falta 'username'.")
+                if self.verbose:
+                    print("[Telnet3] Autenticación requerida, falta 'username'.")
                 try:
                     writer.close()
                 except Exception:
                     pass
                 return ""
             writer.write(self.username + "\r\n")
-            await asyncio.sleep(0.4)
-            after_user = await self._read_for(reader, 0.8)
+            await asyncio.sleep(0.25 if self.fast else 0.35)
+            after_user = await self._read_for(reader, 0.6 if self.fast else 0.7)
             low2 = (banner + after_user).lower()
             if ("password:" in low2 or "pass word:" in low2):
                 if not self.password:
-                    print("[Telnet3] Se solicitó password, pero no fue provisto.")
+                    if self.verbose:
+                        print("[Telnet3] Se solicitó password, pero no fue provisto.")
                     try:
                         writer.close()
                     except Exception:
                         pass
                     return ""
                 writer.write(self.password + "\r\n")
-                await asyncio.sleep(0.6)
-                _ = await self._read_for(reader, 1.0)
+                await asyncio.sleep(0.4 if self.fast else 0.5)
+                _ = await self._read_for(reader, 0.8 if self.fast else 0.9)
 
         # Asegurar prompt y modo enable para Cisco
-        writer.write("\r")
-        await asyncio.sleep(0.12 if self.fast else 0.2)
-        prompt_text = await self._read_for(reader, 0.6)
+        writer.write("\r\n")
+        await asyncio.sleep(0.10 if self.fast else 0.18)
+        prompt_text = await self._read_for(reader, 0.5 if self.fast else 0.6)
         if self.vendor == "cisco":
             snapshot = (banner + prompt_text).lower()
             if "#" not in snapshot:
-                writer.write("\r")
+                writer.write("\r\n")
                 await asyncio.sleep(0.1)
-                writer.write("enable\r")
+                writer.write("enable\r\n")
                 await asyncio.sleep(0.3)
                 resp = await self._read_for(reader, 0.8)
                 if "password" in resp.lower():
                     en_pw = self.connection_data.get("enable_password") or self.password
                     if en_pw:
-                        writer.write(en_pw + "\r")
+                        writer.write(en_pw + "\r\n")
                         await asyncio.sleep(0.6)
                         _ = await self._read_for(reader, 1.0)
 
-        # Deshabilitar paginación una sola vez por sesión
-        await self._disable_paging_once(reader, writer)
-
-        # Enviar comando y leer salida con manejo de '--More--'
-        writer.write("\r")
-        await asyncio.sleep(0.1 if self.fast else 0.15)
-        writer.write(cmd + "\r")
-        await asyncio.sleep(0.12 if self.fast else 0.2)
+        # Evaluar si el comando es largo y si necesitamos deshabilitar paginación
         long_cmd = any(s in cmd.lower() for s in (
             "running-config", "current-configuration", "show configuration"
         ))
-        end = time.monotonic() + ((3.5 if self.fast else 6.0) if long_cmd else (1.2 if self.fast else 1.8))
-        out = ""
-        carry = ""
-        while time.monotonic() < end:
-            try:
-                part = await asyncio.wait_for(reader.read(256), timeout=0.20 if self.fast else 0.25)
-            except Exception:
-                part = ""
-            if part:
-                lower = part.lower()
-                if "--more--" in lower or " ---- more ---- " in lower or "---- more ----" in lower:
-                    try:
-                        writer.write(" ")
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.08 if self.fast else 0.12)
-                    end = time.monotonic() + (2.0 if self.fast else 3.0)
-                    part = part.replace("--More--", "").replace("--more--", "").replace("---- More ----", "")
-                out += part
-                carry += part
-                while "\n" in carry:
-                    line, carry = carry.split("\n", 1)
-                    print(f"[Telnet3] {line}")
-            else:
-                await asyncio.sleep(0.06 if self.fast else 0.1)
-        if carry:
-            print(f"[Telnet3] {carry}")
+        need_paging_disabled = bool(self.connection_data.get("need_paging_disabled"))
+        if need_paging_disabled or long_cmd:
+            await self._disable_paging_once(reader, writer)
+            _ = await self._read_for(reader, 0.3 if self.fast else 0.5)
+
+        # Enviar comando y leer salida con manejo de '--More--'
+        writer.write("\r\n")
+        await asyncio.sleep(0.1 if self.fast else 0.15)
+        writer.write(cmd + "\r\n")
+        await asyncio.sleep(0.12 if self.fast else 0.2)
+        idle = 0.8 if self.fast else 1.1
+        hard = (8.0 if self.fast else 10.0) if not long_cmd else (16.0 if self.fast else 20.0)
+        raw = await self._read_until_idle(reader, writer, idle_window=idle, hard_timeout=hard)
         try:
             writer.close()
         except Exception:
             pass
-        return _sanitize_output(out)
+        cleaned = _sanitize_output(raw)
+        return self._strip_echo_and_prompt(cleaned, cmd)
 
     def run(self, cmd: str) -> str:
         try:
@@ -242,6 +486,98 @@ class TelnetConnection:
         except Exception as e:
             print(f"[Telnet3] Error ejecutando '{cmd}': {e}")
             return ""
+
+    async def _run_batch_async(self, commands: List[str]) -> List[str]:
+        outputs: List[str] = []
+        if not self.host or telnet3 is None:
+            return outputs
+        reader, writer = await telnet3.open_connection(host=self.host, port=self.port, encoding="utf8", shell=None)
+
+        # Autenticación si el servidor lo solicita
+        banner = await self._read_for(reader, 0.8)
+        low = banner.lower()
+        if any(x in low for x in ("username:", "user name:", "login:")):
+            if not self.username:
+                if self.verbose:
+                    print("[Telnet3] Autenticación requerida, falta 'username'.")
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+                return outputs
+            writer.write(self.username + "\r\n")
+            await asyncio.sleep(0.4)
+            after_user = await self._read_for(reader, 0.8)
+            low2 = (banner + after_user).lower()
+            if ("password:" in low2 or "pass word:" in low2):
+                if not self.password:
+                    if self.verbose:
+                        print("[Telnet3] Se solicitó password, pero no fue provisto.")
+                    try:
+                        writer.close()
+                    except Exception:
+                        pass
+                    return outputs
+                writer.write(self.password + "\r\n")
+                await asyncio.sleep(0.45 if self.fast else 0.55)
+                _ = await self._read_for(reader, 0.8 if self.fast else 0.9)
+
+        # Asegurar prompt y modo enable para Cisco
+        writer.write("\r\n")
+        await asyncio.sleep(0.10 if self.fast else 0.18)
+        prompt_text = await self._read_for(reader, 0.5 if self.fast else 0.6)
+        if self.vendor == "cisco":
+            snapshot = (banner + prompt_text).lower()
+            if "#" not in snapshot:
+                writer.write("\r\n")
+                await asyncio.sleep(0.1)
+                writer.write("enable\r\n")
+                await asyncio.sleep(0.3)
+                resp = await self._read_for(reader, 0.8)
+                if "password" in resp.lower():
+                    en_pw = self.connection_data.get("enable_password") or self.password
+                    if en_pw:
+                        writer.write(en_pw + "\r\n")
+                        await asyncio.sleep(0.6)
+                        _ = await self._read_for(reader, 1.0)
+
+        # Evaluar si hay comandos largos
+        long_in_batch = any(any(s in (c or "").lower() for s in ("running-config", "current-configuration", "show configuration")) for c in commands)
+        need_paging_disabled = bool(self.connection_data.get("need_paging_disabled"))
+        if need_paging_disabled or long_in_batch:
+            await self._disable_paging_once(reader, writer)
+            _ = await self._read_for(reader, 0.3 if self.fast else 0.5)
+
+        # Ejecutar cada comando con manejo de '--More--'
+        for cmd in commands:
+            try:
+                writer.write("\r\n")
+                await asyncio.sleep(0.1 if self.fast else 0.15)
+                writer.write(cmd + "\r\n")
+                await asyncio.sleep(0.12 if self.fast else 0.2)
+                idle = 0.8 if self.fast else 1.1
+                # Extender timeout duro para comandos largos (running-config / current-configuration / show configuration)
+                is_long = any(s in (cmd or "").lower() for s in ("running-config", "current-configuration", "show configuration"))
+                hard = ((16.0 if self.fast else 20.0) if is_long else (8.0 if self.fast else 10.0))
+                raw = await self._read_until_idle(reader, writer, idle_window=idle, hard_timeout=hard)
+                cleaned = _sanitize_output(raw)
+                outputs.append(self._strip_echo_and_prompt(cleaned, cmd))
+            except Exception as e:
+                print(f"[Telnet3] Error ejecutando '{cmd}' en batch: {e}")
+                outputs.append("")
+
+        try:
+            writer.close()
+        except Exception:
+            pass
+        return outputs
+
+    def run_batch(self, commands: List[str]) -> List[str]:
+        try:
+            return asyncio.run(self._run_batch_async(commands))
+        except Exception as e:
+            print(f"[Telnet3] Error en run_batch: {e}")
+            return []
 
 
 class SerialConnection:
@@ -346,14 +682,61 @@ def ping_host(hostname: str, count: int = 2, timeout_ms: int = 1000) -> bool:
         return False
 
 
-def check_serial_port(port: str, baudrate: int = 9600, timeout: float = 1.0) -> bool:
-    if not port or serial is None:
+def quick_tcp_check(host: str, port: int, timeout_s: float = 0.7) -> bool:
+    """Conexión TCP rápida para verificar alcanzabilidad del servicio.
+
+    Es más veloz que invocar utilidades del sistema como 'ping' y suficiente
+    para confirmar si el puerto objetivo está disponible.
+    """
+    if not host or not port:
         return False
     try:
-        with serial.Serial(port=port, baudrate=baudrate, timeout=timeout) as ser:
-            time.sleep(0.1)
-            return ser.is_open
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
     except Exception:
+        return False
+
+
+def check_serial_port(port: str, baudrate: int = 9600, timeout: float = 1.0, *, verbose: bool = False, fast: bool = False) -> bool:
+    """Intenta abrir un puerto serial y reporta diagnóstico opcional.
+
+    - Devuelve True si pudo abrir y cerrar el puerto correctamente.
+    - Con ``verbose=True`` imprime el motivo del fallo y sugiere puertos disponibles.
+    """
+    if not port:
+        if verbose:
+            print("[Serial] No se proporcionó un puerto (ej. COM3/COM7).")
+        return False
+    if serial is None:
+        if verbose:
+            print("[Serial] pyserial no está instalado. Instala con: pip install pyserial")
+        return False
+    try:
+        ser = serial.Serial(port=port, baudrate=baudrate, timeout=timeout)
+        # Pequeña espera para estabilizar
+        time.sleep(0.08 if fast else 0.12)
+        ok = bool(ser.is_open)
+        try:
+            ser.close()
+        except Exception:
+            pass
+        if ok and verbose:
+            print(f"[Serial] Puerto {port} abierto correctamente a {baudrate} baudios.")
+        return ok
+    except Exception as e:
+        if verbose:
+            print(f"[Serial] No se pudo abrir {port} @ {baudrate}: {e}")
+            # Intentar listar puertos disponibles para ayudar al usuario
+            try:
+                from serial.tools import list_ports  # type: ignore
+                ports = list(list_ports.comports())
+                if ports:
+                    listado = ", ".join(p.device for p in ports)
+                    print(f"[Serial] Puertos detectados: {listado}")
+                else:
+                    print("[Serial] No se detectan puertos seriales en el sistema.")
+            except Exception as le:
+                print(f"[Serial] No se pudo listar puertos: {le}")
         return False
 
 
@@ -372,6 +755,23 @@ def run_serial_command(connection_data: Dict[str, Any], cmd: str) -> str:
     return SerialConnection(connection_data).run(cmd)
 
 
+# ---- Ejecutores en lote ----
+def run_ssh_commands_batch(connection_data: Dict[str, Any], cmds: List[str]) -> List[str]:
+    return SSHConnection(connection_data).run_batch(cmds)
+
+
+def run_telnet_commands_batch(connection_data: Dict[str, Any], cmds: List[str], vendor: str = "") -> List[str]:
+    return TelnetConnection(connection_data, vendor).run_batch(cmds)
+
+
+def run_serial_commands_batch(connection_data: Dict[str, Any], cmds: List[str]) -> List[str]:
+    outputs: List[str] = []
+    sc = SerialConnection(connection_data)
+    for c in cmds:
+        outputs.append(sc.run(c))
+    return outputs
+
+
 # -------- Vendor detection ---------
 def detect_vendor_ssh(connection_data: Dict[str, Any]) -> str:
     host = connection_data.get("hostname", "")
@@ -379,69 +779,55 @@ def detect_vendor_ssh(connection_data: Dict[str, Any]) -> str:
     username = connection_data.get("username", "")
     password = connection_data.get("password", "")
     fast = bool(connection_data.get("fast_mode"))
-    if not host:
+    verbose = bool(connection_data.get("verbose"))
+    if not host or paramiko is None:
         return "desconocido"
     try:
-        print(f"[SSH] Conectando a {host}:{port} para leer versión...")
+        if verbose:
+            print(f"[SSH] Conectando a {host}:{port} para leer prompt...")
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(host, port=port, username=username or None, password=password or None,
                        look_for_keys=False, allow_agent=False, timeout=3 if fast else 5)
-        vendor = "desconocido"
-        cached_output = ""
-        # Probar primero 'show version' para Cisco/Juniper; luego Huawei
-        for cmd in ("show version", "display version"):
-            print(f"[SSH] Ejecutando: {cmd}")
+        chan = client.invoke_shell()
+        time.sleep(0.2 if fast else 0.3)
+        try:
+            chan.send("\n")
+        except Exception:
+            pass
+        time.sleep(0.4 if fast else 0.6)
+        buf = ""
+        end = time.time() + (0.9 if fast else 1.2)
+        while time.time() < end:
             try:
-                stdin, stdout, stderr = client.exec_command(cmd, timeout=3 if fast else 5)
-                out = stdout.read().decode(errors="ignore") + stderr.read().decode(errors="ignore")
-                if out:
-                    cached_output = out
-                for line in out.splitlines()[:20]:
-                    print(f"[SSH] {line}")
-                low = out.lower()
-                if "huawei" in low or "vrp" in low:
-                    if cached_output:
-                        connection_data["cached_version_output"] = cached_output
-                    vendor = "huawei"
-                    break
-                if "cisco" in low or "ios" in low:
-                    if cached_output:
-                        connection_data["cached_version_output"] = cached_output
-                    vendor = "cisco"
-                    break
-                if "junos" in low or "juniper" in low:
-                    if cached_output:
-                        connection_data["cached_version_output"] = cached_output
-                    vendor = "juniper"
-                    break
-            except Exception as e:
-                print(f"[SSH] Error ejecutando {cmd}: {e}")
-                continue
+                if chan.recv_ready():
+                    part = chan.recv(512).decode(errors="ignore")
+                else:
+                    part = ""
+            except Exception:
+                part = ""
+            if part:
+                buf += part
+            else:
+                time.sleep(0.08 if fast else 0.12)
+        if verbose:
+            print("[SSH] Salida inicial/prompt:")
+            for line in buf.splitlines()[:20]:
+                print(f"[SSH] {line}")
+        prompt_line = ""
+        for pl in reversed(buf.splitlines()):
+            pl = pl.strip()
+            if pl:
+                prompt_line = pl
+                break
+        vendor = _vendor_from_prompt(prompt_line)
         try:
             client.close()
         except Exception:
             pass
-        # Si no hubo coincidencia pero tenemos salida, cachearla igualmente
-        if vendor == "desconocido" and cached_output:
-            connection_data["cached_version_output"] = cached_output
         return vendor
     except Exception as e:
         print(f"[SSH] Error en detección de vendor: {e}")
-        try:
-            sock = socket.create_connection((host, port), timeout=2 if fast else 3)
-            banner = sock.recv(128).decode(errors="ignore")
-            print(f"[SSH] Banner: {banner.strip()}")
-            sock.close()
-            l = banner.lower()
-            if "huawei" in l:
-                return "huawei"
-            if "cisco" in l:
-                return "cisco"
-            if "junos" in l or "juniper" in l:
-                return "juniper"
-        except Exception:
-            pass
         return "desconocido"
 
 
@@ -451,11 +837,13 @@ def detect_vendor_telnet(connection_data: Dict[str, Any]) -> str:
     username = connection_data.get("username", "")
     password = connection_data.get("password", "")
     fast = bool(connection_data.get("fast_mode"))
+    verbose = bool(connection_data.get("verbose"))
     if not host or telnet3 is None:
         return "desconocido"
     try:
         async def _detect() -> str:
-            print(f"[Telnet3] Conectando a {host}:{port}...")
+            if verbose:
+                print(f"[Telnet3] Conectando a {host}:{port}...")
             reader, writer = await telnet3.open_connection(host=host, port=port, encoding="utf8", shell=None)
 
             async def _read_for(seconds: float = 1.0) -> str:
@@ -473,9 +861,10 @@ def detect_vendor_telnet(connection_data: Dict[str, Any]) -> str:
                 return buf
 
             out_all = await _read_for(0.9 if fast else 1.2)
-            print("[Telnet3] Bienvenida/prompt:")
-            for line in out_all.splitlines()[:20]:
-                print(f"[Telnet3] {line}")
+            if verbose:
+                print("[Telnet3] Bienvenida/prompt:")
+                for line in out_all.splitlines()[:20]:
+                    print(f"[Telnet3] {line}")
 
             async def _clear_more(text: str) -> str:
                 tries = 12
@@ -491,7 +880,8 @@ def detect_vendor_telnet(connection_data: Dict[str, Any]) -> str:
             low = out_all.lower()
             if any(p in low for p in ("username:", "user name:", "login:")):
                 if not username:
-                    print("[Telnet3] Autenticación requerida, pero falta 'username'.")
+                    if verbose:
+                        print("[Telnet3] Autenticación requerida, pero falta 'username'.")
                     try:
                         writer.close()
                     except Exception:
@@ -503,7 +893,8 @@ def detect_vendor_telnet(connection_data: Dict[str, Any]) -> str:
                 low = out_all.lower()
                 if ("password:" in low or "pass word:" in low):
                     if not password:
-                        print("[Telnet3] Se solicitó password, pero no fue provisto.")
+                        if verbose:
+                            print("[Telnet3] Se solicitó password, pero no fue provisto.")
                         try:
                             writer.close()
                         except Exception:
@@ -517,91 +908,25 @@ def detect_vendor_telnet(connection_data: Dict[str, Any]) -> str:
             await asyncio.sleep(0.15 if fast else 0.2)
             out_all += await _read_for(0.6 if fast else 0.8)
             out_all = await _clear_more(out_all)
-            for l in out_all.splitlines()[-10:]:
-                print(f"[Telnet3] {l}")
 
-            async def _send_and_stream(cmd: str, delay: float = 0.2, read_sec: float = 1.2) -> str:
-                print(f"[Telnet3] Ejecutando: {cmd}")
-                writer.write("\r")
-                await asyncio.sleep(0.15)
-                writer.write(cmd + "\r")
-                await asyncio.sleep(delay)
-                end = time.monotonic() + read_sec
-                out_cmd = ""
-                carry = ""
-                while time.monotonic() < end:
-                    try:
-                        part = await asyncio.wait_for(reader.read(256), timeout=0.25)
-                    except Exception:
-                        part = ""
-                    if part:
-                        out_cmd += part
-                        carry += part
-                        while "\n" in carry:
-                            line, carry = carry.split("\n", 1)
-                            print(f"[Telnet3] {line}")
-                    else:
-                        await asyncio.sleep(0.1)
-                if carry:
-                    print(f"[Telnet3] {carry}")
-                return out_cmd
-
-            await _send_and_stream("terminal length 0", delay=0.15 if fast else 0.2, read_sec=0.6 if fast else 0.8)
             prompt_text = ""
             for pl in reversed(out_all.splitlines()):
-                if pl.strip():
-                    prompt_text = pl.strip()
+                pl = pl.strip()
+                if pl:
+                    prompt_text = pl
                     break
-            if prompt_text and prompt_text.endswith(">"):
-                writer.write("enable\r")
-                await asyncio.sleep(0.4 if fast else 0.6)
-                en_resp = await _read_for(0.8 if fast else 1.0)
-                if "password" in en_resp.lower():
-                    en_pw = connection_data.get("enable_password") or password
-                    if en_pw:
-                        writer.write(en_pw + "\r")
-                        await asyncio.sleep(0.4 if fast else 0.6)
-                        _ = await _read_for(0.8 if fast else 1.0)
-            vendor_found = "desconocido"
-            for cmd in ("show version", "display version"):
-                buf = await _send_and_stream(cmd)
-                out_all += "\n" + buf
-                low_loop = buf.lower()
-                # Detectar rápidamente para evitar comandos inválidos
-                if "huawei" in low_loop or "vrp" in low_loop:
-                    vendor_found = "huawei"
-                    break
-                if "cisco" in low_loop or "ios" in low_loop:
-                    vendor_found = "cisco"
-                    connection_data["paging_disabled"] = True
-                    break
-                if "junos" in low_loop or "juniper" in low_loop:
-                    vendor_found = "juniper"
-                    break
+            vendor_found = _vendor_from_prompt(prompt_text)
 
             try:
                 writer.close()
             except Exception:
                 pass
-
-            low = out_all.lower()
-            # Cachear salida de versión para evitar repetir en el análisis
-            if out_all:
-                connection_data["cached_version_output"] = out_all
-            if vendor_found != "desconocido":
-                return vendor_found
-            if "huawei" in low or "vrp" in low:
-                return "huawei"
-            if "cisco" in low or "ios" in low:
-                connection_data["paging_disabled"] = True
-                return "cisco"
-            if "junos" in low or "juniper" in low:
-                return "juniper"
-            return "desconocido"
+            return vendor_found
 
         return asyncio.run(_detect())
     except Exception as e:
-        print(f"[Telnet3] Error en detección de vendor: {e}")
+        if verbose:
+            print(f"[Telnet3] Error en detección de vendor: {e}")
         return "desconocido"
 
 
@@ -611,10 +936,12 @@ def detect_vendor_serial(connection_data: Dict[str, Any]) -> str:
     password = connection_data.get("password", "")
     baudrate = int(connection_data.get("baudrate", 9600) or 9600)
     fast = bool(connection_data.get("fast_mode"))
+    verbose = bool(connection_data.get("verbose"))
     if not port or serial is None:
         return "desconocido"
     try:
-        print(f"[Serial] Probando versión en {port}...")
+        if verbose:
+            print(f"[Serial] Leyendo prompt en {port}...")
         with serial.Serial(port=port, baudrate=baudrate, timeout=1.0 if fast else 1.5) as ser:
             try:
                 ser.reset_input_buffer()
@@ -665,29 +992,24 @@ def detect_vendor_serial(connection_data: Dict[str, Any]) -> str:
                 if not any(x in wl for x in ("username:", "user name:", "login:", "password:")):
                     break
 
-            out_all = ""
-            for cmd in ("display version\r", "show version\r"):
-                print(f"[Serial] Ejecutando: {cmd.strip()}")
-                ser.write(cmd.encode())
-                time.sleep(0.9 if fast else 1.2)
-                buf = _read_chunk(1.1 if fast else 1.5)
-                out_all += "\n" + buf
-                print(f"[Serial] Resultado {cmd.strip()}:")
-                for line in buf.splitlines()[:20]:
+            # Leer prompt final tras un retorno de carro
+            ser.write(b"\r")
+            time.sleep(0.5 if fast else 0.7)
+            out = _read_chunk(1.0 if fast else 1.3)
+            if verbose:
+                print("[Serial] Salida inicial/prompt:")
+                for line in out.splitlines()[:20]:
                     print(f"[Serial] {line}")
-                low = out_all.lower()
-                if "huawei" in low or "vrp" in low:
-                    connection_data["cached_version_output"] = out_all
-                    return "huawei"
-                if "cisco" in low or "ios" in low:
-                    connection_data["cached_version_output"] = out_all
-                    return "cisco"
-                if "junos" in low or "juniper" in low:
-                    connection_data["cached_version_output"] = out_all
-                    return "juniper"
-        # Cachear salida si no hubo coincidencia
-        if out_all:
-            connection_data["cached_version_output"] = out_all
+            prompt_text = ""
+            for pl in reversed(out.splitlines()):
+                pl = pl.strip()
+                if pl:
+                    prompt_text = pl
+                    break
+            return _vendor_from_prompt(prompt_text)
+    except Exception as e:
+        if verbose:
+            print(f"[Serial] Error en detección de vendor: {e}")
         return "desconocido"
     except Exception as e:
         print(f"[Serial] Error en detección de vendor: {e}")

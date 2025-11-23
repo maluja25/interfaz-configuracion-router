@@ -27,3 +27,32 @@ RUNNING_CONFIG: Dict[str, str] = {
     "cisco": "show running-config",
     "juniper": "show configuration",
 }
+
+# Comandos para obtener rutas estáticas por fabricante (filtradas)
+STATIC_ROUTES: Dict[str, str] = {
+    "huawei": "display current-configuration | include ip route-static",
+    # Referencias opcionales para otros vendors (no usados en este requerimiento)
+    "cisco": "show running-config | sec ip route",
+    "juniper": "show configuration | display set | match 'set routing-options static route'",
+}
+
+# Comandos para vecinos OSPF por fabricante
+OSPF_NEIGHBORS: Dict[str, str] = {
+    "huawei": "display ospf peer",
+    "cisco": "show ip ospf neighbor",
+    "juniper": "show ospf neighbor",
+}
+
+# Comandos para resumen/peers de BGP por fabricante
+BGP_PEERS_SUMMARY: Dict[str, str] = {
+    "huawei": "display bgp peer",
+    "cisco": "show ip bgp summary",
+    "juniper": "show bgp summary",
+}
+
+# Comandos para obtener solo la sección de OSPF en running-config
+OSPF_CONFIG_SECTION: Dict[str, str] = {
+    "cisco": "show running-config | sec ospf",
+    # En Huawei puede variar según modelo
+    "huawei": "display current-configuration | section include ospf",
+}

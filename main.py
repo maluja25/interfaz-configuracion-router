@@ -567,7 +567,6 @@ def main() -> None:
     parser.add_argument("--username", default="")
     parser.add_argument("--password", default="")
     parser.add_argument("--enable-password", dest="enable_password", default="")
-    parser.add_argument("--vendor", dest="vendor_hint", choices=["Auto", "Huawei", "Cisco", "Juniper"], default="Auto")
     parser.add_argument("--fast", dest="fast_mode", action="store_true", help="Acelerar análisis (fast_mode)")
     parser.add_argument("--baudrate", type=int, default=9600, help="Baudrate para Serial")
     parser.add_argument("--verbose", action="store_true", help="Mostrar salida parseada y resumen en consola")
@@ -586,9 +585,11 @@ def main() -> None:
             "password": args.password,
             "enable_password": args.enable_password,
             "fast_mode": args.fast_mode,
-            "vendor_hint": args.vendor_hint,
+            # Sin pista de fabricante: siempre autodetección
             "baudrate": args.baudrate if args.protocol == "Serial" else "",
             "verbose": args.verbose,
+            # Prefetch de running-config en CLI para evitar segunda pasada
+            "prefetch_running_config": True,
         }
         print(f"[CLI] Conectando via {connection_data['protocol']}…")
         target = connection_data.get("hostname") or connection_data.get("port")
@@ -615,13 +616,20 @@ def main() -> None:
         return
 
     # Modo GUI (por defecto)
-    auth_dialog = AuthDialog()
+    auth_dialog = AuthDialog(verbose=args.verbose)
     connection_data = auth_dialog.show()
 
     # Si se canceló la conexión, salir
     if connection_data is None:
         print("Conexión cancelada por el usuario")
         return
+
+    # Propagar --verbose también en modo GUI para habilitar logs en consola
+    try:
+        if args.verbose:
+            connection_data["verbose"] = True
+    except Exception:
+        pass
 
     # Iniciar aplicación principal
     app = RouterManagerApp(connection_data)

@@ -213,9 +213,31 @@ class InterfaceConfigFrame(tk.Frame):
         title_label.pack(side=tk.LEFT)
         
         # Frame para la tabla
-        table_frame = tk.Frame(list_frame, bg='white', relief=tk.SOLID, borderwidth=1)
+        table_frame = tk.Frame(list_frame, bg='white')
         table_frame.pack(anchor='n', fill=tk.BOTH, expand=True, padx=12)
         
+        # Estilo para el Treeview
+        style = ttk.Style()
+        style.theme_use("clam")
+
+        style.configure("Treeview", 
+                        rowheight=28, 
+                        font=("Arial", 10), 
+                        background="white", 
+                        fieldbackground="white",
+                        borderwidth=1,
+                        relief="solid")
+                        
+        style.configure("Treeview.Heading", 
+                        font=("Arial", 11, "bold"), 
+                        background="#EAEAEA", 
+                        relief="solid",
+                        borderwidth=1)
+
+        style.map('Treeview',
+                  background=[('selected', '#007bff')],
+                  foreground=[('selected', 'white')])
+
         # Crear Treeview
         columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Descripción')
         self.interface_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=10)
@@ -289,8 +311,9 @@ class InterfaceConfigFrame(tk.Frame):
             ), tags=(interface.get('status', 'down'),))
         
         # Configurar tags para colores
-        self.interface_tree.tag_configure('up', foreground='#28a745')
-        self.interface_tree.tag_configure('down', foreground='#dc3545')
+        self.interface_tree.tag_configure('up', background='#d4edda', foreground='#155724')
+        self.interface_tree.tag_configure('down', background='#f8d7da', foreground='#721c24')
+        self.interface_tree.tag_configure('oddrow', background='#f2f2f2')
         
     def edit_interface(self):
         """Editar interfaz seleccionada"""
