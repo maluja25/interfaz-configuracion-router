@@ -322,6 +322,25 @@ def parse_cisco_ip_interface_brief(text: str) -> List[Dict[str, Any]]:
         })
     return interfaces
 
+def parse_cisco_interface_section(text: str) -> List[Dict[str, Any]]:
+    import re
+    results: List[Dict[str, Any]] = []
+    for m in re.finditer(r"(?mis)^\s*interface\s+(\S+)\s*([\s\S]*?)(?=^\s*interface\s+\S+|\Z)", text):
+        name = m.group(1)
+        blk = m.group(2) or ""
+        ip = ""
+        mask = ""
+        ni = re.search(r"(?mi)^\s*no\s+ip\s+address\b", blk)
+        if not ni:
+            mm = re.search(r"(?mi)^\s*ip\s+address\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\b", blk)
+            if mm:
+                ip = mm.group(1)
+                mask = mm.group(2)
+        tmatch = re.match(r"^([A-Za-z-]+)", name)
+        itype = tmatch.group(1) if tmatch else "Ethernet"
+        results.append({"name": name, "type": itype, "ip_address": ip, "mask": mask})
+    return results
+
 
 def parse_cisco_version(text: str) -> Dict[str, Any]:
     import re
@@ -463,40 +482,109 @@ def parse_cisco_static_routes(text: str) -> List[Dict[str, Any]]:
 # ---------------- Cisco OSPF/BGP Config Parsers -----------------
 
 def parse_cisco_ospf_config(text: str) -> Dict[str, Any]:
-    """Extrae process-id, router-id y networks de 'show running-config' Cisco.
+    """Parsea TODOS los procesos OSPF en un running-config de Cisco.
 
-    Busca bloques de 'router ospf <pid>' y líneas 'network <ip> <wildcard> area <id>'.
+    Devuelve un diccionario con claves de compatibilidad (process_id, router_id,
+    networks) basadas en el primer proceso encontrado y una lista completa en
+    'processes' con cada bloque `router ospf <pid>`.
     """
-    result: Dict[str, Any] = {"process_id": "", "networks": [], "router_id": ""}
-    # router ospf <pid>
-    m = re.search(r"router\s+ospf\s+(\d+)", text, re.IGNORECASE)
-    if m:
-        result["process_id"] = m.group(1)
-        # dentro del bloque router ospf ... capturar router-id
-        block_match = re.search(r"router\s+ospf\s+\d+([\s\S]*?)(?:!|\nrouter\s|\Z)", text, re.IGNORECASE)
-        if block_match:
-            block = block_match.group(1)
-            rid = re.search(r"router-id\s+(\d{1,3}(?:\.\d{1,3}){3})", block, re.IGNORECASE)
-            if rid:
-                result["router_id"] = rid.group(1)
-    # networks
-    for nm in re.finditer(r"network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\s+area\s+([\d\.]+)", text, re.IGNORECASE):
-        result["networks"].append({
-            "network": nm.group(1),
-            "wildcard": nm.group(2),
-            "area": nm.group(3),
+    result: Dict[str, Any] = {"process_id": "", "networks": [], "router_id": "", "processes": []}
+
+    # Encontrar bloques 'router ospf <pid>' y su contenido hasta el siguiente bloque
+    # o final del texto.
+    for match in re.finditer(r"(?mi)^router\s+ospf\s+(\d+)\b([\s\S]*?)(?=^router\s+ospf\s+\d+\b|\Z)", text):
+        pid = match.group(1)
+        block = match.group(2)
+        # router-id dentro del bloque
+        rid_m = re.search(r"router-id\s+(\d{1,3}(?:\.\d{1,3}){3})", block, re.IGNORECASE)
+        rid = rid_m.group(1) if rid_m else ""
+        # networks dentro del bloque
+        nets: List[Dict[str, Any]] = []
+        for nm in re.finditer(r"(?i)network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\s+area\s+([\d\.]+)", block):
+            nets.append({
+                "network": nm.group(1),
+                "wildcard": nm.group(2),
+                "area": nm.group(3),
+            })
+        result["processes"].append({
+            "process_id": pid,
+            "router_id": rid,
+            "networks": nets,
         })
+
+    # Compatibilidad: usar el primer proceso (si existe) para rellenar claves planas
+    if result["processes"]:
+        first = result["processes"][0]
+        result["process_id"] = first.get("process_id", "")
+        result["router_id"] = first.get("router_id", "")
+        result["networks"] = first.get("networks", [])
+
     return result
 
 
 def parse_cisco_bgp_config(text: str) -> Dict[str, Any]:
-    """Extrae AS y vecinos BGP de 'show running-config' Cisco."""
-    result: Dict[str, Any] = {"as_number": "", "neighbors": []}
-    m = re.search(r"router\s+bgp\s+(\d+)", text, re.IGNORECASE)
+    """Extrae AS, vecinos y VRFs de 'show running-config' Cisco.
+
+    Devuelve:
+    - as_number: AS global
+    - router_id: router-id global si se define
+    - neighbors: lista de vecinos (global/VRF, mezcla)
+    - global: {networks: [...], neighbors: [...], config_text: str}
+    - vrfs: [{name, router_id, networks: [...], neighbors: [...], config_text: str}]
+    """
+    result: Dict[str, Any] = {
+        "as_number": "",
+        "router_id": "",
+        "neighbors": [],
+        "global": {"networks": [], "neighbors": [], "config_text": ""},
+        "vrfs": [],
+    }
+
+    # AS global y router-id
+    m = re.search(r"(?mi)^\s*router\s+bgp\s+(\d+)\b", text)
     if m:
         result["as_number"] = m.group(1)
-    for nm in re.finditer(r"neighbor\s+(\d{1,3}(?:\.\d{1,3}){3})\s+remote-as\s+(\d+)", text, re.IGNORECASE):
-        result["neighbors"].append({"ip": nm.group(1), "remote_as": nm.group(2)})
+    rid = re.search(r"(?mi)^\s*bgp\s+router-id\s+(\d{1,3}(?:\.\d{1,3}){3})\b", text)
+    if rid:
+        result["router_id"] = rid.group(1)
+
+    # Bloque global address-family ipv4
+    gblk_m = re.search(r"(?mis)^\s*address-family\s+ipv4\b([\s\S]*?)^\s*exit-address-family\b", text)
+    if gblk_m:
+        gblk = gblk_m.group(1)
+        result["global"]["config_text"] = gblk.strip()
+        # networks
+        for nm in re.finditer(r"(?mi)^\s*network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+mask\s+(\d{1,3}(?:\.\d{1,3}){3})\b", gblk):
+            result["global"]["networks"].append({"prefix": nm.group(1), "mask": nm.group(2)})
+        # neighbors en global
+        for nb in re.finditer(r"(?mi)^\s*neighbor\s+(\d{1,3}(?:\.\d{1,3}){3})\s+remote-as\s+(\d+)\b", gblk):
+            item = {"ip": nb.group(1), "remote_as": nb.group(2)}
+            result["global"]["neighbors"].append(item)
+            result["neighbors"].append(item)
+
+    # VRFs: bloques 'address-family ipv4 vrf <NAME>'
+    for mvrf in re.finditer(r"(?mis)^\s*address-family\s+ipv4\s+vrf\s+(\S+)\b([\s\S]*?)^\s*exit-address-family\b", text):
+        name = mvrf.group(1)
+        body = mvrf.group(2)
+        vrf: Dict[str, Any] = {"name": name, "router_id": "", "networks": [], "neighbors": [], "config_text": body.strip()}
+        rid2 = re.search(r"(?mi)^\s*bgp\s+router-id\s+(\d{1,3}(?:\.\d{1,3}){3})\b", body)
+        if rid2:
+            vrf["router_id"] = rid2.group(1)
+        for nm in re.finditer(r"(?mi)^\s*network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+mask\s+(\d{1,3}(?:\.\d{1,3}){3})\b", body):
+            vrf["networks"].append({"prefix": nm.group(1), "mask": nm.group(2)})
+        for nb in re.finditer(r"(?mi)^\s*neighbor\s+(\d{1,3}(?:\.\d{1,3}){3})\s+remote-as\s+(\d+)\b", body):
+            item = {"ip": nb.group(1), "remote_as": nb.group(2)}
+            vrf["neighbors"].append(item)
+            result["neighbors"].append(item)
+        result["vrfs"].append(vrf)
+
+    # Vecinos globales en otros lugares (fallback)
+    for nm in re.finditer(r"(?mi)^\s*neighbor\s+(\d{1,3}(?:\.\d{1,3}){3})\s+remote-as\s+(\d+)\b", text):
+        item = {"ip": nm.group(1), "remote_as": nm.group(2)}
+        # evitar duplicados
+        if item not in result["neighbors"]:
+            result["neighbors"].append(item)
+
     return result
 
 
@@ -530,88 +618,269 @@ def parse_cisco_ospf_neighbor(text: str) -> List[Dict[str, Any]]:
 
 
 def parse_cisco_bgp_summary(text: str) -> List[Dict[str, Any]]:
-    """Parsea 'show ip bgp summary' y devuelve lista de peers.
+    """Parsea 'show ip bgp summary' y devuelve lista de peers con columnas completas.
 
-    Extrae ip, AS, Up/Down y State/PfxRcd. Si el último campo es un número,
-    lo interpreta como prefijos recibidos y estado 'Established'.
+    Columnas: Neighbor, V, AS, MsgRcvd, MsgSent, TblVer, InQ, OutQ, Up/Down, State/PfxRcd.
+    Mantiene compatibilidad con claves usadas previamente: ip, as, updown, state, pref_rcv.
     """
     peers: List[Dict[str, Any]] = []
-    if re.search(r"BGP\s+not\s+active", text, re.IGNORECASE):
+    if re.search(r"BGP\s+not\s+active", text or "", re.IGNORECASE):
         return peers
-    for raw in text.splitlines():
+    for raw in (text or "").splitlines():
         line = raw.strip()
-        if not line or line.lower().startswith("neighbor"):
+        if not line:
             continue
+        # Saltar encabezados
+        if re.match(r"(?i)^neighbor\b", line):
+            continue
+        # Formato estándar IOS
         m = re.match(
-            r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+\d+\s+(?P<as>\d+)\s+\d+\s+\d+\s+\S+\s+\d+\s+\d+\s+(?P<updown>\S+)\s+(?P<state>\S+)$",
+            r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+"  # Neighbor
+            r"(?P<v>\d+)\s+"                          # V
+            r"(?P<as>\d+)\s+"                         # AS
+            r"(?P<msg_rcvd>\d+)\s+"                   # MsgRcvd
+            r"(?P<msg_sent>\d+)\s+"                   # MsgSent
+            r"(?P<tblver>\S+)\s+"                     # TblVer (puede ser número o '-')
+            r"(?P<inq>\d+)\s+"                        # InQ
+            r"(?P<outq>\d+)\s+"                       # OutQ
+            r"(?P<updown>\S+)\s+"                     # Up/Down
+            r"(?P<statepfx>\S+)\s*$",                 # State/PfxRcd
             line
         )
-        if m:
-            state = m.group("state")
-            pref = ""
-            if re.match(r"^\d+$", state):
-                pref = state
-                state = "Established"
-            peers.append({
-                "ip": m.group("ip"),
-                "as": m.group("as"),
-                "updown": m.group("updown"),
-                "state": state,
-                "pref_rcv": pref,
-            })
+        if not m:
+            # Variantes: algunos IOS muestran espacios múltiples o caracteres especiales
+            continue
+        statepfx = m.group("statepfx")
+        state = statepfx
+        pref = ""
+        if re.match(r"^\d+$", statepfx):
+            pref = statepfx
+            state = "Established"
+        peers.append({
+            "ip": m.group("ip"),
+            "v": m.group("v"),
+            "as": m.group("as"),
+            "msg_rcvd": m.group("msg_rcvd"),
+            "msg_sent": m.group("msg_sent"),
+            "tblver": m.group("tblver"),
+            "inq": m.group("inq"),
+            "outq": m.group("outq"),
+            "updown": m.group("updown"),
+            "state": state,
+            "pref_rcv": pref,
+        })
     return peers
 
 
 # ---------------- Huawei OSPF/BGP Parsers -----------------
 
 def parse_huawei_ospf_config(text: str) -> Dict[str, Any]:
+    """Parsea TODOS los procesos OSPF en una configuración Huawei (VRP).
+
+    Devuelve un dict que mantiene compatibilidad hacia atrás:
+    - 'process_id', 'router_id', 'networks' con el primer proceso encontrado
+    - 'processes': lista con todos los procesos detectados
+    """
     import re
-    result: Dict[str, Any] = {"process_id": "", "networks": [], "router_id": ""}
-    m = re.search(r"\bospf\s+(\d+)\b", text, re.IGNORECASE)
-    if not m:
+
+    out: Dict[str, Any] = {
+        "process_id": "",
+        "router_id": "",
+        "networks": [],
+        "processes": [],
+    }
+
+    # Bloques 'ospf <pid>' hasta el siguiente 'ospf <pid>' o fin
+    for m in re.finditer(r"(?mi)^\s*ospf\s+(\d+)\b([\s\S]*?)(?=^\s*ospf\s+\d+\b|\Z)", text):
+        pid = m.group(1)
+        blk = m.group(2) or ""
+        proc: Dict[str, Any] = {
+            "process_id": pid,
+            "router_id": "",
+            "networks": [],
+        }
+
+        # router-id dentro del bloque
+        rid = re.search(r"(?mi)router[- ]id\s+(\d{1,3}(?:\.\d{1,3}){3})", blk)
+        if rid:
+            proc["router_id"] = rid.group(1)
+
+        # Áreas y sus redes
+        for am in re.finditer(r"(?mi)^\s*area\s+([\d\.]+)\b([\s\S]*?)(?=^\s*area\s+[\d\.]+\b|\Z)", blk):
+            area_id = am.group(1)
+            body = am.group(2) or ""
+            for nm in re.finditer(r"(?mi)^\s*network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\b", body):
+                proc["networks"].append({
+                    "network": nm.group(1),
+                    "wildcard": nm.group(2),
+                    "area": area_id,
+                })
+
+        out["processes"].append(proc)
+
+    # Compatibilidad: si no se detectaron bloques explícitos, intentar heurísticas
+    if not out["processes"]:
+        # Intento con variante "OSPF Process <pid>"
         m = re.search(r"OSPF\s+Process\s+(\d+)", text, re.IGNORECASE)
-    if m:
-        result["process_id"] = m.group(1)
-    # router-id en configuraciones Huawei/Cisco-like
-    rid = re.search(r"router[- ]id\s+(\d{1,3}(?:\.\d{1,3}){3})", text, re.IGNORECASE)
-    if rid:
-        result["router_id"] = rid.group(1)
-    for area_match in re.finditer(r"area\s+([\d\.]+)\s*\n([\s\S]*?)(?=\n\s*area\s+|\Z)", text, re.IGNORECASE):
-        area_id = area_match.group(1)
-        body = area_match.group(2)
-        for net_m in re.finditer(r"network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})", body, re.IGNORECASE):
-            result["networks"].append({
-                "network": net_m.group(1),
-                "wildcard": net_m.group(2),
-                "area": area_id,
-            })
-    return result
+        if m:
+            pid = m.group(1)
+            proc = {"process_id": pid, "router_id": "", "networks": []}
+            rid = re.search(r"router[- ]id\s+(\d{1,3}(?:\.\d{1,3}){3})", text, re.IGNORECASE)
+            if rid:
+                proc["router_id"] = rid.group(1)
+            for am in re.finditer(r"area\s+([\d\.]+)\s*\n([\s\S]*?)(?=\n\s*area\s+|\Z)", text, re.IGNORECASE):
+                area_id = am.group(1)
+                body = am.group(2) or ""
+                for nm in re.finditer(r"network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})", body, re.IGNORECASE):
+                    proc["networks"].append({
+                        "network": nm.group(1),
+                        "wildcard": nm.group(2),
+                        "area": area_id,
+                    })
+            out["processes"].append(proc)
+
+    # Poblar claves planas con el primer proceso para UI antigua
+    if out["processes"]:
+        out["process_id"] = out["processes"][0].get("process_id", "")
+        out["router_id"] = out["processes"][0].get("router_id", "")
+        out["networks"] = out["processes"][0].get("networks", [])
+
+    return out
 
 
 def parse_huawei_bgp_config(text: str) -> Dict[str, Any]:
+    """Parsea BGP VRP: AS, vecinos, global y VRFs.
+
+    Devuelve:
+    - as_number, router_id
+    - neighbors: lista combinada
+    - global: {networks: [...], imports: [...], neighbors: [...], config_text: str}
+    - vrfs: [{name, networks: [...], imports: [...], neighbors: [...], config_text: str}]
+    """
     import re
-    result: Dict[str, Any] = {"as_number": "", "neighbors": []}
-    m = re.search(r"\bbgp\s+(\d+)\b", text, re.IGNORECASE)
+    result: Dict[str, Any] = {
+        "as_number": "",
+        "router_id": "",
+        "neighbors": [],
+        "global": {"networks": [], "imports": [], "neighbors": [], "config_text": ""},
+        "vrfs": [],
+    }
+
+    m = re.search(r"(?mi)^\s*bgp\s+(\d+)\b", text)
     if m:
         result["as_number"] = m.group(1)
-    for nm in re.finditer(r"peer\s+(\d{1,3}(?:\.\d{1,3}){3})\s+as-number\s+(\d+)", text, re.IGNORECASE):
-        result["neighbors"].append({"ip": nm.group(1), "remote_as": nm.group(2)})
+    rid = re.search(r"(?mi)^\s*bgp\s+router-id\s+(\d{1,3}(?:\.\d{1,3}){3})\b", text)
+    if rid:
+        result["router_id"] = rid.group(1)
+
+    # Bloque global 'ipv4-family unicast'
+    gblk_m = re.search(r"(?mis)^\s*ipv4-family\s+unicast\b([\s\S]*?)(?=^\s*ipv4-family\b|\Z)", text)
+    if gblk_m:
+        gblk = gblk_m.group(1)
+        result["global"]["config_text"] = gblk.strip()
+        for nm in re.finditer(r"(?mi)^\s*network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\b", gblk):
+            result["global"]["networks"].append({"prefix": nm.group(1), "mask": nm.group(2)})
+        for im in re.finditer(r"(?mi)^\s*import-route\s+(\S+)(?:\s+(\d+))?", gblk):
+            proto = im.group(1)
+            pid = im.group(2) or ""
+            result["global"]["imports"].append({"protocol": proto, "process": pid})
+        for nb in re.finditer(r"(?mi)^\s*peer\s+(\d{1,3}(?:\.\d{1,3}){3})\s+as-number\s+(\d+)\b", gblk):
+            item = {"ip": nb.group(1), "remote_as": nb.group(2)}
+            result["global"]["neighbors"].append(item)
+            result["neighbors"].append(item)
+
+    # VRFs: 'ipv4-family vpnv4 vpn-instance <NAME>'
+    for mvrf in re.finditer(r"(?mis)^\s*ipv4-family\s+vpnv4\s+vpn-instance\s+(\S+)\b([\s\S]*?)(?=^\s*ipv4-family\b|\Z)", text):
+        name = mvrf.group(1)
+        body = mvrf.group(2)
+        vrf: Dict[str, Any] = {"name": name, "networks": [], "imports": [], "neighbors": [], "config_text": body.strip()}
+        for nm in re.finditer(r"(?mi)^\s*network\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\b", body):
+            vrf["networks"].append({"prefix": nm.group(1), "mask": nm.group(2)})
+        for im in re.finditer(r"(?mi)^\s*redistribute\s+(\S+)|^\s*import-route\s+(\S+)(?:\s+(\d+))?", body):
+            # Captura 'redistribute static' y 'import-route ospf 1'
+            if im.group(1):
+                vrf["imports"].append({"protocol": im.group(1), "process": ""})
+            else:
+                proto = im.group(2)
+                pid = im.group(3) or ""
+                vrf["imports"].append({"protocol": proto, "process": pid})
+        for nb in re.finditer(r"(?mi)^\s*peer\s+(\d{1,3}(?:\.\d{1,3}){3})\s+as-number\s+(\d+)\b", body):
+            item = {"ip": nb.group(1), "remote_as": nb.group(2)}
+            vrf["neighbors"].append(item)
+            result["neighbors"].append(item)
+        result["vrfs"].append(vrf)
+
+    # Vecinos definidos fuera de bloques (fallback)
+    for nm in re.finditer(r"(?mi)^\s*peer\s+(\d{1,3}(?:\.\d{1,3}){3})\s+as-number\s+(\d+)\b", text):
+        item = {"ip": nm.group(1), "remote_as": nm.group(2)}
+        if item not in result["neighbors"]:
+            result["neighbors"].append(item)
     return result
 
 
 def parse_huawei_bgp_peer(text: str) -> List[Dict[str, Any]]:
+    """Parsea 'display bgp peer' de Huawei.
+
+    Intenta capturar las columnas estándar: Neighbor, V, AS, MsgRcvd, MsgSent,
+    TblVer, InQ, OutQ, Up/Down, State/PfxRcd. En plataformas que no muestran
+    TblVer/InQ/OutQ, esas columnas se devuelven vacías.
+    """
     import re
     peers: List[Dict[str, Any]] = []
-    for line in text.splitlines():
-        m = re.match(r"\s*(\d{1,3}(?:\.\d{1,3}){3})\s+\d+\s+(\d+)\s+\d+\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s+(\d+)", line)
-        if m:
-            peers.append({
-                "ip": m.group(1),
-                "as": m.group(2),
-                "updown": m.group(3),
-                "state": m.group(4),
-                "pref_rcv": m.group(5),
-            })
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # Saltar encabezados
+        if re.match(r"(?i)^peer\b|^neighbor\b", line):
+            continue
+        # Variante completa con TblVer/InQ/OutQ
+        m = re.match(
+            r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+"     # Neighbor
+            r"(?P<v>\d+)\s+"                             # V
+            r"(?P<as>\d+)\s+"                            # AS
+            r"(?P<msg_rcvd>\d+)\s+"                      # MsgRcvd
+            r"(?P<msg_sent>\d+)\s+"                      # MsgSent
+            r"(?P<tblver>\d+)\s+"                        # TblVer
+            r"(?P<inq>\d+)\s+"                           # InQ
+            r"(?P<outq>\d+)\s+"                          # OutQ
+            r"(?P<updown>\S+)\s+"                        # Up/Down
+            r"(?P<statepfx>\S+)\s*$",                    # State/PfxRcd
+            line
+        )
+        if not m:
+            # Variante sin TblVer/InQ/OutQ (común en algunos VRP)
+            m = re.match(
+                r"^(?P<ip>\d{1,3}(?:\.\d{1,3}){3})\s+"   # Neighbor
+                r"(?P<v>\d+)\s+"                           # V
+                r"(?P<as>\d+)\s+"                          # AS
+                r"(?P<msg_rcvd>\d+)\s+"                    # MsgRcvd
+                r"(?P<msg_sent>\d+)\s+"                    # MsgSent
+                r"(?P<updown>\S+)\s+"                      # Up/Down
+                r"(?P<statepfx>\S+)\s*$",                  # State/PfxRcd
+                line
+            )
+        if not m:
+            continue
+        statepfx = m.group("statepfx")
+        state = statepfx
+        pref = ""
+        if re.match(r"^\d+$", statepfx):
+            pref = statepfx
+            state = "Established"
+        peers.append({
+            "ip": m.group("ip"),
+            "v": m.groupdict().get("v", ""),
+            "as": m.group("as"),
+            "msg_rcvd": m.groupdict().get("msg_rcvd", ""),
+            "msg_sent": m.groupdict().get("msg_sent", ""),
+            "tblver": m.groupdict().get("tblver", ""),
+            "inq": m.groupdict().get("inq", ""),
+            "outq": m.groupdict().get("outq", ""),
+            "updown": m.group("updown"),
+            "state": state,
+            "pref_rcv": pref,
+        })
     return peers
 
 

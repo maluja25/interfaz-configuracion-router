@@ -28,6 +28,10 @@ RUNNING_CONFIG: Dict[str, str] = {
     "juniper": "show configuration",
 }
 
+INTERFACE_CONFIG_SECTION: Dict[str, str] = {
+    "cisco": "show running-config | sec interface",
+}
+
 # Comandos para obtener rutas estáticas por fabricante (filtradas)
 STATIC_ROUTES: Dict[str, str] = {
     "huawei": "display current-configuration | include ip route-static",
@@ -55,4 +59,13 @@ OSPF_CONFIG_SECTION: Dict[str, str] = {
     "cisco": "show running-config | sec ospf",
     # En Huawei puede variar según modelo
     "huawei": "display current-configuration | section include ospf",
+}
+
+# Comandos para obtener solo la sección de BGP en la configuración por fabricante
+BGP_CONFIG_SECTION: Dict[str, str] = {
+    # Cisco: filtra el bloque de BGP
+    "cisco": "show running-config | sec bgp",
+    # Huawei VRP: algunas versiones usan 'section include', otras 'sec inc'
+    "huawei": "display current-configuration | section include bgp",
+    # Juniper no aplica directamente; se omite
 }

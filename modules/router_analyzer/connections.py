@@ -579,6 +579,89 @@ class TelnetConnection:
             print(f"[Telnet3] Error en run_batch: {e}")
             return []
 
+    async def _run_script_async(self, commands: List[str]) -> List[str]:
+        outputs: List[str] = []
+        if not self.host or telnet3 is None:
+            return outputs
+        reader, writer = await telnet3.open_connection(host=self.host, port=self.port, encoding="utf8", shell=None)
+
+        # Autenticación si el servidor lo solicita
+        banner = await self._read_for(reader, 0.8 if self.fast else 1.0)
+        low = banner.lower()
+        if any(x in low for x in ("username:", "user name:", "login:")):
+            if not self.username:
+                if self.verbose:
+                    print("[Telnet3] Autenticación requerida, falta 'username'.")
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+                return outputs
+            writer.write(self.username + "\r\n")
+            await asyncio.sleep(0.4 if self.fast else 0.6)
+            after_user = await self._read_for(reader, 0.8 if self.fast else 0.9)
+            low2 = (banner + after_user).lower()
+            if ("password:" in low2 or "pass word:" in low2):
+                if not self.password:
+                    if self.verbose:
+                        print("[Telnet3] Se solicitó password, pero no fue provisto.")
+                    try:
+                        writer.close()
+                    except Exception:
+                        pass
+                    return outputs
+                writer.write(self.password + "\r\n")
+                await asyncio.sleep(0.45 if self.fast else 0.55)
+                _ = await self._read_for(reader, 0.8 if self.fast else 0.9)
+
+        # Asegurar prompt y modo enable para Cisco
+        writer.write("\r\n")
+        await asyncio.sleep(0.10 if self.fast else 0.18)
+        prompt_text = await self._read_for(reader, 0.5 if self.fast else 0.6)
+        if self.vendor == "cisco":
+            snapshot = (banner + prompt_text).lower()
+            if "#" not in snapshot:
+                writer.write("\r\n")
+                await asyncio.sleep(0.1)
+                writer.write("enable\r\n")
+                await asyncio.sleep(0.3)
+                resp = await self._read_for(reader, 0.8)
+                if "password" in resp.lower():
+                    en_pw = self.connection_data.get("enable_password") or self.password
+                    if en_pw:
+                        writer.write(en_pw + "\r\n")
+                        await asyncio.sleep(0.6)
+                        _ = await self._read_for(reader, 1.0)
+
+        # Enviar todos los comandos como un script en un único write
+        try:
+            writer.write("\r\n")
+            await asyncio.sleep(0.1 if self.fast else 0.15)
+            script = "\r\n".join(commands) + "\r\n"
+            writer.write(script)
+            await asyncio.sleep(0.18 if self.fast else 0.25)
+            idle = 0.9 if self.fast else 1.2
+            hard = 14.0 if self.fast else 18.0
+            raw = await self._read_until_idle(reader, writer, idle_window=idle, hard_timeout=hard)
+            cleaned = _sanitize_output(raw)
+            outputs.append(cleaned)
+        except Exception as e:
+            print(f"[Telnet3] Error ejecutando script: {e}")
+            outputs.append("")
+
+        try:
+            writer.close()
+        except Exception:
+            pass
+        return outputs
+
+    def run_script(self, commands: List[str]) -> List[str]:
+        try:
+            return asyncio.run(self._run_script_async(commands))
+        except Exception as e:
+            print(f"[Telnet3] Error en run_script: {e}")
+            return []
+
 
 class SerialConnection:
     def __init__(self, connection_data: Dict[str, Any]):
@@ -763,6 +846,8 @@ def run_ssh_commands_batch(connection_data: Dict[str, Any], cmds: List[str]) -> 
 def run_telnet_commands_batch(connection_data: Dict[str, Any], cmds: List[str], vendor: str = "") -> List[str]:
     return TelnetConnection(connection_data, vendor).run_batch(cmds)
 
+def run_telnet_commands_script(connection_data: Dict[str, Any], cmds: List[str], vendor: str = "") -> List[str]:
+    return TelnetConnection(connection_data, vendor).run_script(cmds)
 
 def run_serial_commands_batch(connection_data: Dict[str, Any], cmds: List[str]) -> List[str]:
     outputs: List[str] = []

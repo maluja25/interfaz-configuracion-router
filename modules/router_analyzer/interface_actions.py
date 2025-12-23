@@ -1,17 +1,34 @@
 from typing import Dict, Any, List
-from .connections import run_ssh_command, run_telnet_command, run_serial_command
+from .connections import (
+    run_ssh_command,
+    run_telnet_command,
+    run_serial_command,
+    run_ssh_commands_batch,
+    run_telnet_commands_batch,
+    run_serial_commands_batch,
+    run_telnet_commands_script,
+)
 
 
 def _exec(connection_data: Dict[str, Any], commands: List[str], vendor: str = "") -> List[str]:
     proto = connection_data.get("protocol", "SSH2")
+    verbose = bool(connection_data.get("verbose"))
+    if verbose:
+        try:
+            print(f"[CMD] Proto={proto} Vendor={vendor} Comandos={commands}")
+        except Exception:
+            pass
+    if proto == "SSH2":
+        return run_ssh_commands_batch(connection_data, commands)
+    if proto == "Telnet":
+        if bool(connection_data.get("send_script")):
+            return run_telnet_commands_script(connection_data, commands, vendor=vendor)
+        return run_telnet_commands_batch(connection_data, commands, vendor=vendor)
+    if proto == "Serial":
+        return run_serial_commands_batch(connection_data, commands)
     outputs: List[str] = []
     for cmd in commands:
-        if proto == "SSH2":
-            outputs.append(run_ssh_command(connection_data, cmd))
-        elif proto == "Telnet":
-            outputs.append(run_telnet_command(connection_data, cmd, vendor=vendor))
-        elif proto == "Serial":
-            outputs.append(run_serial_command(connection_data, cmd))
+        outputs.append(run_ssh_command(connection_data, cmd))
     return outputs
 
 

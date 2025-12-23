@@ -728,110 +728,284 @@ class RoutingConfigFrame(tk.Frame):
             messagebox.showerror("Error", f"No se pudo abrir el editor: {e}")
     
     def _render_ospf_config_form(self, container: tk.Frame) -> None:
-        """Formulario de configuración OSPF: process-id, router-id y redes."""
+        """Formulario de configuración OSPF con pestañas por proceso."""
         ttk.Label(container, text="Configuración de OSPF", font=("Arial", 13, "bold"), background=COLOR_WHITE).pack(anchor="w", pady=(0, 10))
 
-        form = tk.Frame(container, bg=COLOR_WHITE)
-        form.pack(fill=tk.X, expand=False)
+        # Notebook para procesos
+        nb = ttk.Notebook(container)
+        nb.pack(fill=tk.BOTH, expand=True)
 
-        # Router OSPF (process-id)
-        tk.Label(form, text="Router OSPF", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
-        self.ospf_pid_entry = ttk.Entry(form, width=12)
-        self.ospf_pid_entry.grid(row=0, column=1, sticky="w")
-
-        # Router-ID
-        tk.Label(form, text="Router-ID", font=("Arial", 10), bg=COLOR_WHITE).grid(row=1, column=0, sticky="w", padx=(0, 8))
-        self.ospf_rid_entry = ttk.Entry(form, width=16)
-        self.ospf_rid_entry.grid(row=1, column=1, sticky="w")
-
-        # Precargar existentes
+        # Obtener procesos existentes (compatibles con estructura previa)
         ospf = (self.shared_data.get('routing_protocols', {}).get(PROTOCOL_OSPF, {}) or {})
-        if ospf.get('process_id'):
-            self.ospf_pid_entry.insert(0, str(ospf.get('process_id')))
-        if ospf.get('router_id'):
-            self.ospf_rid_entry.insert(0, str(ospf.get('router_id')))
+        processes = list(ospf.get('processes') or [])
+        if not processes:
+            base = {
+                'process_id': ospf.get('process_id', ''),
+                'router_id': ospf.get('router_id', ''),
+                'networks': ospf.get('networks', []) or []
+            }
+            processes = [base] if (base['process_id'] or base['router_id'] or base['networks']) else [{
+                'process_id': '', 'router_id': '', 'networks': []
+            }]
 
-        # Caja de redes con contorno negro de 1 px
-        box = tk.Frame(container, bg=COLOR_WHITE, bd=0, relief="flat", highlightthickness=1, highlightbackground="#000000")
-        box.pack(fill=tk.X, expand=False, pady=(10, 0))
+        # Estado de pestañas para consolidar guardado
+        self._ospf_tabs_state: List[Dict[str, Any]] = []
 
-        hdr = tk.Frame(box, bg="#f7f7f7")
-        hdr.pack(fill=tk.X)
-        tk.Label(hdr, text="Network", font=("Arial", 10, "bold"), bg="#f7f7f7").pack(side="left", padx=10, pady=6)
-
-        row = tk.Frame(box, bg=COLOR_WHITE, padx=10, pady=10)
-        row.pack(fill=tk.X)
-        tk.Label(row, text="Red/IP", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w")
-        self.ospf_net_entry = ttk.Entry(row)
-        self.ospf_net_entry.grid(row=0, column=1, sticky="ew", padx=(8, 16))
-
-        tk.Label(row, text="Wildcard", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=2, sticky="w")
-        self.ospf_wild_entry = ttk.Entry(row)
-        self.ospf_wild_entry.grid(row=0, column=3, sticky="ew", padx=(8, 16))
-
-        tk.Label(row, text="Area", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=4, sticky="w")
-        self.ospf_area_entry = ttk.Entry(row, width=10)
-        self.ospf_area_entry.grid(row=0, column=5, sticky="w", padx=(8, 0))
-
-        add_btn = ttk.Button(row, text="+", width=3, command=self._add_ospf_network)
-        add_btn.grid(row=0, column=6, sticky="w", padx=(12, 0))
-
-        # Tabla de redes agregadas en formato de celdas (como la vista de vecinos)
-        self.ospf_list_frame = tk.Frame(box, bg=COLOR_WHITE, bd=0, relief="flat")
-        self.ospf_list_frame.pack(fill=tk.X, padx=10, pady=(6, 10))
-        self.ospf_table_headers = ["Red/IP", "Wildcard", "Area"]
-        # Datos de filas actuales (listas para edición)
-        self.ospf_net_rows: List[List[str]] = [
-            [n.get('network',''), n.get('wildcard',''), n.get('area','')] for n in (ospf.get('networks', []) or [])
-        ]
-        # Referencias a labels por celda para edición y selección
-        self._ospf_cell_labels: List[List[tk.Label]] = []
-        self._selected_ospf_row_index: Optional[int] = None
-        self._ospf_cell_editor: Optional[ttk.Entry] = None
-        self._render_ospf_cells_table()
-
-        # Acciones
-        actions = tk.Frame(container, bg=COLOR_WHITE)
-        actions.pack(fill=tk.X, pady=(12, 0))
-
-        def on_save():
-            pid = self.ospf_pid_entry.get().strip()
-            rid = self.ospf_rid_entry.get().strip()
+        def save_all() -> None:
+            """Consolida todos los procesos desde las pestañas y guarda en shared_data."""
+            processes_out: List[Dict[str, Any]] = []
+            for st in self._ospf_tabs_state:
+                pid = st['pid_entry'].get().strip()
+                rid = st['rid_entry'].get().strip()
+                nets: List[Dict[str, Any]] = []
+                for row in st['net_rows']:
+                    if len(row) >= 3 and row[0] and row[1] and row[2]:
+                        nets.append({'network': row[0], 'wildcard': row[1], 'area': row[2]})
+                if pid or rid or nets:
+                    processes_out.append({'process_id': pid, 'router_id': rid, 'networks': nets})
 
             self.shared_data.setdefault('routing_protocols', {}).setdefault(PROTOCOL_OSPF, {})
-            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['process_id'] = pid
-            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['router_id'] = rid
+            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['processes'] = processes_out
 
-            nets = []
-            for row in self.ospf_net_rows:
-                if len(row) >= 3 and row[0] and row[1] and row[2]:
-                    nets.append({"network": row[0], "wildcard": row[1], "area": row[2]})
-            self.shared_data['routing_protocols'][PROTOCOL_OSPF]['networks'] = nets
-
-            enabled = bool(pid) or bool(nets)
-            self.shared_data['routing_protocols'][PROTOCOL_OSPF][ENABLED] = enabled
+            if processes_out:
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['process_id'] = processes_out[0].get('process_id', '')
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['router_id'] = processes_out[0].get('router_id', '')
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['networks'] = processes_out[0].get('networks', [])
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF][ENABLED] = True
+            else:
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['process_id'] = ''
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['router_id'] = ''
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF]['networks'] = []
+                self.shared_data['routing_protocols'][PROTOCOL_OSPF][ENABLED] = False
 
             try:
                 self.resync_protocol_states()
             except Exception:
                 pass
-
+            try:
+                self.update_preview()
+            except Exception:
+                pass
             messagebox.showinfo("Configuración Guardada", "Configuración de OSPF guardada.")
 
-        def on_delete_selected():
-            idx = getattr(self, '_selected_ospf_row_index', None)
-            if idx is None:
-                messagebox.showwarning("Eliminar Red", "Selecciona una fila para eliminar.")
-                return
-            try:
-                del self.ospf_net_rows[idx]
-                self._selected_ospf_row_index = None
-                self._render_ospf_cells_table()
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo eliminar la fila: {e}")
+        # Crear pestañas por proceso
+        for idx, proc in enumerate(processes):
+            tab = tk.Frame(nb, bg=COLOR_WHITE)
+            nb.add(tab, text=f"P{proc.get('process_id') or idx + 1}")
 
-        ttk.Button(actions, text="Guardar", command=on_save, style="Primary.TButton").pack(side="right")
-        ttk.Button(actions, text="Eliminar Red", command=on_delete_selected, style="Secondary.TButton").pack(side="left")
+            # Formulario básico (alineado con margen izquierdo uniforme)
+            form = tk.Frame(tab, bg=COLOR_WHITE)
+            # Mayor separación respecto al borde izquierdo
+            # Añadir margen superior para que el contenido del tab quede más abajo
+            form.pack(fill=tk.X, expand=False, padx=24, pady=(12, 6))
+            try:
+                form.grid_columnconfigure(0, weight=0)
+                form.grid_columnconfigure(1, weight=1)
+            except Exception:
+                pass
+
+            tk.Label(form, text="Router OSPF", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+            pid_entry = ttk.Entry(form, width=12)
+            pid_entry.grid(row=0, column=1, sticky="w")
+            if proc.get('process_id'):
+                pid_entry.insert(0, str(proc.get('process_id')))
+
+            tk.Label(form, text="Router-ID", font=("Arial", 10), bg=COLOR_WHITE).grid(row=1, column=0, sticky="w", padx=(0, 8))
+            rid_entry = ttk.Entry(form, width=16)
+            rid_entry.grid(row=1, column=1, sticky="w")
+            if proc.get('router_id'):
+                rid_entry.insert(0, str(proc.get('router_id')))
+
+            # Caja de redes con contorno (alineada al borde del formulario)
+            box = tk.Frame(tab, bg=COLOR_WHITE, bd=0, relief="flat", highlightthickness=1, highlightbackground="#000000")
+            # Alinear y separar más del borde
+            box.pack(fill=tk.X, expand=False, padx=24, pady=(10, 0))
+
+            hdr = tk.Frame(box, bg="#f7f7f7")
+            # Separación horizontal interna más amplia
+            hdr.pack(fill=tk.X, padx=20)
+            tk.Label(hdr, text="Network", font=("Arial", 10, "bold"), bg="#f7f7f7").pack(side="left", padx=10, pady=6)
+
+            row = tk.Frame(box, bg=COLOR_WHITE, padx=10, pady=10)
+            # Igualar separación con el encabezado para alineado visual
+            row.pack(fill=tk.X, padx=20)
+            try:
+                row.grid_columnconfigure(0, weight=0)
+                row.grid_columnconfigure(1, weight=1)
+                row.grid_columnconfigure(2, weight=0)
+                row.grid_columnconfigure(3, weight=1)
+                row.grid_columnconfigure(4, weight=0)
+                row.grid_columnconfigure(5, weight=0)
+            except Exception:
+                pass
+            tk.Label(row, text="Red/IP", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=0, sticky="w")
+            net_entry = ttk.Entry(row)
+            net_entry.grid(row=0, column=1, sticky="ew", padx=(8, 16))
+
+            tk.Label(row, text="Wildcard", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=2, sticky="w")
+            wild_entry = ttk.Entry(row)
+            wild_entry.grid(row=0, column=3, sticky="ew", padx=(8, 16))
+
+            tk.Label(row, text="Area", font=("Arial", 10), bg=COLOR_WHITE).grid(row=0, column=4, sticky="w")
+            area_entry = ttk.Entry(row, width=10)
+            area_entry.grid(row=0, column=5, sticky="w", padx=(8, 0))
+
+            # Tabla de redes en formato celdas
+            list_frame = tk.Frame(box, bg=COLOR_WHITE, bd=0, relief="flat")
+            # Igualar margen izquierdo con la fila de entradas para que las columnas queden alineadas
+            list_frame.pack(fill=tk.X, padx=20, pady=(6, 10))
+            table_headers = ["Red/IP", "Wildcard", "Area"]
+            net_rows: List[List[str]] = [
+                [n.get('network', ''), n.get('wildcard', ''), n.get('area', '')] for n in (proc.get('networks', []) or [])
+            ]
+            cell_labels: List[List[tk.Label]] = []
+            selected_index: Optional[int] = None
+            cell_editor: Optional[ttk.Entry] = None
+
+            def render_table() -> None:
+                # Limpiar
+                for child in list_frame.winfo_children():
+                    child.destroy()
+                nonlocal cell_labels
+                cell_labels = []
+
+                sep_color = "#000000"
+                # Tabla con contorno sutil y separación respecto al borde del bloque
+                table = tk.Frame(
+                    list_frame,
+                    bg=COLOR_WHITE,
+                    bd=0,
+                    relief="flat",
+                    highlightthickness=1,
+                    highlightbackground=sep_color,
+                )
+                table.pack(fill=tk.X, expand=False, padx=6)
+
+                col_count = len(table_headers)
+                total_cols = col_count * 2 + 1
+
+                for c, title in enumerate(table_headers):
+                    header = tk.Label(
+                        table,
+                        text=title,
+                        font=("Arial", 9, "bold"),
+                        bg="#f7f7f7",
+                        bd=0,
+                        padx=6,
+                        pady=4,
+                        anchor="center",
+                    )
+                    header.grid(row=0, column=1 + c * 2, sticky="nsew")
+
+                hsep = tk.Frame(table, bg=sep_color, height=1)
+                hsep.grid(row=1, column=0, columnspan=total_cols, sticky="ew")
+
+                def select_row(idx: int) -> None:
+                    nonlocal selected_index
+                    selected_index = idx
+                    for r, lrow in enumerate(cell_labels):
+                        for lbl in lrow:
+                            lbl.configure(bg=COLOR_WHITE, fg="#000000")
+                    if idx is not None and 0 <= idx < len(cell_labels):
+                        for lbl in cell_labels[idx]:
+                            lbl.configure(bg="#dbe9ff", fg="#000000")
+
+                def start_edit_cell(row_index: int, col_index: int) -> None:
+                    nonlocal cell_editor
+                    lbl = cell_labels[row_index][col_index]
+                    x, y, w, h = lbl.winfo_x(), lbl.winfo_y(), lbl.winfo_width(), lbl.winfo_height()
+                    if cell_editor is not None:
+                        try:
+                            cell_editor.destroy()
+                        except Exception:
+                            pass
+                        cell_editor = None
+                    editor = ttk.Entry(lbl.master)
+                    editor.insert(0, net_rows[row_index][col_index])
+                    editor.place(x=x, y=y, width=w, height=h)
+                    editor.focus()
+                    cell_editor = editor
+                    def commit(event=None):
+                        val = editor.get().strip()
+                        net_rows[row_index][col_index] = val
+                        lbl.configure(text=val)
+                        editor.destroy()
+                        cell_editor = None
+                    editor.bind('<Return>', commit)
+                    editor.bind('<FocusOut>', commit)
+
+                for r, row_vals in enumerate(net_rows, start=2):
+                    label_row: List[tk.Label] = []
+                    for c, cell in enumerate(row_vals):
+                        lbl = tk.Label(
+                            table,
+                            text=str(cell),
+                            font=("Arial", 9),
+                            bg=COLOR_WHITE,
+                            bd=0,
+                            padx=6,
+                            pady=3,
+                            anchor="w",
+                        )
+                        lbl.grid(row=r, column=1 + c * 2, sticky="nsew")
+                        lbl.bind('<Button-1>', lambda e, ri=r-2: select_row(ri))
+                        lbl.bind('<Double-1>', lambda e, ri=r-2, ci=c: start_edit_cell(ri, ci))
+                        label_row.append(lbl)
+                    cell_labels.append(label_row)
+
+                    if r < (len(net_rows) + 1):
+                        hsep_row = tk.Frame(table, bg=sep_color, height=1)
+                        hsep_row.grid(row=r + 1, column=0, columnspan=total_cols, sticky="ew")
+
+                for c in range(col_count - 1):
+                    col_sep = tk.Frame(table, bg=sep_color, width=1)
+                    col_sep.grid(row=0, column=2 + c * 2, rowspan=len(net_rows) + 2, sticky="ns")
+                for c in range(total_cols):
+                    table.grid_columnconfigure(c, weight=1 if c % 2 == 1 else 0)
+
+            def add_network() -> None:
+                net = (net_entry.get() or "").strip()
+                wild = (wild_entry.get() or "").strip()
+                area = (area_entry.get() or "").strip()
+                if not net or not wild or not area:
+                    messagebox.showwarning("Campos incompletos", "Completa Red/IP, Wildcard y Area.")
+                    return
+                net_rows.append([net, wild, area])
+                render_table()
+                net_entry.delete(0, tk.END)
+                wild_entry.delete(0, tk.END)
+                area_entry.delete(0, tk.END)
+
+            add_btn = ttk.Button(row, text="+", width=3, command=add_network)
+            add_btn.grid(row=0, column=6, sticky="w", padx=(12, 0))
+
+            render_table()
+
+            actions = tk.Frame(tab, bg=COLOR_WHITE)
+            # Separación coherente con el formulario y la caja de redes
+            actions.pack(fill=tk.X, padx=24, pady=(12, 0))
+
+            def delete_selected() -> None:
+                nonlocal selected_index
+                if selected_index is None:
+                    messagebox.showwarning("Eliminar Red", "Selecciona una fila para eliminar.")
+                    return
+                try:
+                    del net_rows[selected_index]
+                    selected_index = None
+                    render_table()
+                except Exception as e:
+                    messagebox.showerror("Error", f"No se pudo eliminar la fila: {e}")
+
+            ttk.Button(actions, text="Guardar", command=save_all, style="Primary.TButton").pack(side="right")
+            ttk.Button(actions, text="Eliminar Red", command=delete_selected, style="Secondary.TButton").pack(side="left")
+
+            # Registrar estado de pestaña
+            self._ospf_tabs_state.append({
+                'pid_entry': pid_entry,
+                'rid_entry': rid_entry,
+                'net_rows': net_rows,
+            })
 
     def _add_ospf_network(self) -> None:
         """Añade una red a la tabla de celdas OSPF."""
@@ -1695,13 +1869,32 @@ class RoutingConfigFrame(tk.Frame):
                 
                 # Generar comandos según el tipo de protocolo
                 if protocol_id == PROTOCOL_OSPF:
-                    commands.append(f"router ospf {protocol_data.get('process_id', '1')}")
-                    rid = protocol_data.get('router_id')
-                    if rid:
-                        commands.append(f"router-id {rid}")
-                    for network in protocol_data.get('networks', []):
-                        if network.get('network') and network.get('wildcard') and network.get('area'):
-                            commands.append(f"  network {network['network']} {network['wildcard']} area {network['area']}")
+                    # Soporte multi-proceso: usar lista 'processes' si existe
+                    processes = list(protocol_data.get('processes') or [])
+                    if processes:
+                        for proc in processes:
+                            pid = str(proc.get('process_id', '') or '1')
+                            commands.append(f"router ospf {pid}")
+                            rid = proc.get('router_id')
+                            if rid:
+                                commands.append(f"  router-id {rid}")
+                            for network in proc.get('networks', []):
+                                if network.get('network') and network.get('wildcard') and network.get('area'):
+                                    commands.append(
+                                        f"  network {network['network']} {network['wildcard']} area {network['area']}"
+                                    )
+                    else:
+                        # Compatibilidad hacia atrás: usar claves planas
+                        pid = str(protocol_data.get('process_id', '') or '1')
+                        commands.append(f"router ospf {pid}")
+                        rid = protocol_data.get('router_id')
+                        if rid:
+                            commands.append(f"  router-id {rid}")
+                        for network in protocol_data.get('networks', []):
+                            if network.get('network') and network.get('wildcard') and network.get('area'):
+                                commands.append(
+                                    f"  network {network['network']} {network['wildcard']} area {network['area']}"
+                                )
                 
                 elif protocol_id == PROTOCOL_BGP:
                     commands.append(f"router bgp {protocol_data.get('as_number', '1')}")

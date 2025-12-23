@@ -69,49 +69,19 @@ class DashboardFrame(tk.Frame):
                                  fg='#666666')
         subtitle_label.pack(anchor=tk.W, pady=(5, 0))
         
-        # Frame principal con scroll (ajustando el ancho al canvas para evitar espacios)
-        main_canvas = tk.Canvas(self, bg='#ffffff', highlightthickness=0)
-        scrollbar = ttk.Scrollbar(self, orient="vertical", command=main_canvas.yview)
-        scrollable_frame = tk.Frame(main_canvas, bg='#ffffff')
+        # Contenedor principal SIN scroll: todo el contenido se organiza y ajusta
+        content_frame = tk.Frame(self, bg='#ffffff')
+        content_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Crear ventana para el frame desplazable y guardar su id
-        window_id = main_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
-
-        # Ajustar el scrollregion y el ancho del contenido al ancho disponible del canvas
-        def _update_scrollregion(_evt=None):
-            main_canvas.configure(scrollregion=main_canvas.bbox("all"))
-        scrollable_frame.bind("<Configure>", _update_scrollregion)
-
-        def _resize_to_canvas(event):
-            try:
-                main_canvas.itemconfig(window_id, width=event.width)
-            except Exception:
-                pass
-        main_canvas.bind("<Configure>", _resize_to_canvas)
-
-        main_canvas.configure(yscrollcommand=scrollbar.set)
-        
         # Grid de estadísticas principales deshabilitado
-        
-        # Información del dispositivo
-        self.create_device_info(scrollable_frame)
-        
-        # Estado de interfaces removido: esta funcionalidad está en el módulo de Configuración de Interfaces
-        
-        # Configuración del router
-        self.create_running_config_section(scrollable_frame)
-        
-        # Reactivar desplazamiento con la rueda del mouse en el canvas principal
-        def _on_canvas_mousewheel(event):
-            try:
-                main_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-            except Exception:
-                pass
-        main_canvas.bind_all("<MouseWheel>", _on_canvas_mousewheel)
 
-        main_canvas.pack(side="left", fill="both", expand=True)
-        # Mostrar la barra de desplazamiento externa para navegación en pantallas pequeñas
-        scrollbar.pack(side="right", fill="y")
+        # Información del dispositivo
+        self.create_device_info(content_frame)
+
+        # Estado de interfaces removido: esta funcionalidad está en el módulo de Configuración de Interfaces
+
+        # Configuración del router
+        self.create_running_config_section(content_frame)
         
     def create_stats_grid(self, parent):
         """Crear grid de estadísticas principales"""

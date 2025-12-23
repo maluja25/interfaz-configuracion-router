@@ -19,6 +19,7 @@ from .vendor_commands import (
     OSPF_NEIGHBORS,
     BGP_PEERS_SUMMARY,
     OSPF_CONFIG_SECTION,
+    BGP_CONFIG_SECTION,
 )
 from .parsers import (
     parse_huawei_version,
@@ -27,6 +28,9 @@ from .parsers import (
     parse_cisco_ip_interface_brief,
     parse_juniper_version,
     parse_juniper_interfaces_terse,
+    # Importar parsers BGP para detectar VRFs y poder consultar resúmenes
+    parse_cisco_bgp_config,
+    parse_huawei_bgp_config,
 )
 
 
@@ -114,6 +118,8 @@ def analyze(connection_data: Dict[str, Any]) -> Dict[str, Any]:
     raw_ospf_peers = ""
     raw_bgp_summary = ""
     raw_ospf_cfg = ""
+    raw_bgp_cfg = ""
+    raw_bgp_vrf_summaries: dict[str, str] = {}
 
     cached_ver = connection_data.get("cached_version_output")
     if isinstance(cached_ver, str) and cached_ver.strip():
@@ -148,18 +154,21 @@ def analyze(connection_data: Dict[str, Any]) -> Dict[str, Any]:
         sroute = STATIC_ROUTES.get(ven_key)
         if sroute:
             cmds.append(sroute); labels.append("static_routes")
-        # Vecinos OSPF y resumen/peers BGP
+        # Vecinos OSPF
         ospf_cmd = OSPF_NEIGHBORS.get(ven_key)
         if ospf_cmd:
             cmds.append(ospf_cmd); labels.append("ospf_peers")
-        bgp_cmd = BGP_PEERS_SUMMARY.get(ven_key)
-        if bgp_cmd:
-            cmds.append(bgp_cmd); labels.append("bgp_summary")
+        # IMPORTANTE: No enviar resumen BGP automáticamente.
+        # Se obtiene bajo demanda desde el módulo BGP al pulsar el botón.
         # Sección de configuración OSPF (requerimiento Telnet3: Cisco)
         # Ejecutar siempre que exista el comando para el vendor.
         ocmd = OSPF_CONFIG_SECTION.get(ven_key)
         if ocmd:
             cmds.append(ocmd); labels.append("ospf_cfg")
+        # Sección de configuración BGP por vendor
+        bcmd = BGP_CONFIG_SECTION.get(ven_key)
+        if bcmd:
+            cmds.append(bcmd); labels.append("bgp_cfg")
     else:
         if not raw_version:
             cmds.extend(["display version", "show version"]) ; labels.extend(["version","version"])
@@ -202,6 +211,11 @@ def analyze(connection_data: Dict[str, Any]) -> Dict[str, Any]:
                 raw_bgp_summary = out
             elif tag == "ospf_cfg" and not raw_ospf_cfg:
                 raw_ospf_cfg = out
+            elif tag == "bgp_cfg" and not raw_bgp_cfg:
+                raw_bgp_cfg = out
+
+    # No capturar resúmenes BGP de VRFs automáticamente.
+    # El módulo BGP solicitará estos comandos bajo demanda.
 
     # Parsear según vendor (si sigue desconocido, intentar heurística básica Huawei/Cisco/Juniper)
     parsed: Dict[str, Any] = {"device_info": {}, "interfaces": []}
@@ -242,6 +256,8 @@ def analyze(connection_data: Dict[str, Any]) -> Dict[str, Any]:
         "ospf_peers": raw_ospf_peers,
         "bgp_summary": raw_bgp_summary,
         "ospf_config_section": raw_ospf_cfg,
+        "bgp_config_section": raw_bgp_cfg,
+        "bgp_vrf_summaries": raw_bgp_vrf_summaries,
     }
     if verbose:
         print("[CLI] Parseo completado.", flush=True)

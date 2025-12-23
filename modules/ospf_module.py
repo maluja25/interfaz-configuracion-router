@@ -31,23 +31,42 @@ class OspfModuleWindow(tk.Toplevel):
 
         ospf = (self.shared_data.get("routing_protocols", {}).get("ospf", {}) or {})
         enabled = bool(ospf.get("enabled"))
+        processes = list(ospf.get("processes") or [])
         process_id = ospf.get("process_id", "")
         router_id = ospf.get("router_id", "")
 
         ttk.Label(summary_frame, text=f"Estado: {'Habilitado' if enabled else 'Deshabilitado'}", background="white").pack(side=tk.LEFT)
-        ttk.Label(summary_frame, text=f"  |  Proceso: {process_id or 'N/A'}", background="white").pack(side=tk.LEFT)
-        ttk.Label(summary_frame, text=f"  |  Router-ID: {router_id or 'N/A'}", background="white").pack(side=tk.LEFT)
+        if processes:
+            pid_list = ", ".join([str(p.get("process_id", "")) or "?" for p in processes])
+            ttk.Label(summary_frame, text=f"  |  Procesos: {pid_list}", background="white").pack(side=tk.LEFT)
+        else:
+            ttk.Label(summary_frame, text=f"  |  Proceso: {process_id or 'N/A'}", background="white").pack(side=tk.LEFT)
+        ttk.Label(summary_frame, text=f"  |  Router-ID: {router_id or (', '.join([p.get('router_id','') for p in processes if p.get('router_id')]) or 'N/A')}", background="white").pack(side=tk.LEFT)
 
         # Redes OSPF
         networks_frame = ttk.Frame(container, style="Card.TFrame", padding=(10, 10))
-        networks_frame.pack(fill=tk.X, expand=False)
+        networks_frame.pack(fill=tk.BOTH, expand=True)
         ttk.Label(networks_frame, text="Redes Anunciadas (network / wildcard / area)", font=("Arial", 11, "bold"), background="white").pack(anchor="w", pady=(0, 6))
 
-        net_rows = [
-            (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
-            for n in (ospf.get("networks", []) or [])
-        ]
-        self._build_table_window(networks_frame, ["Network", "Wildcard", "Area"], net_rows)
+        if processes:
+            nb = ttk.Notebook(networks_frame)
+            nb.pack(fill=tk.BOTH, expand=True)
+            for idx, proc in enumerate(processes):
+                tab = ttk.Frame(nb)
+                nb.add(tab, text=f"P{proc.get('process_id') or idx+1}")
+                rid_lbl = ttk.Label(tab, text=f"Router-ID: {proc.get('router_id', '') or 'N/A'}", background="white")
+                rid_lbl.pack(anchor="w", pady=(0,6))
+                net_rows = [
+                    (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
+                    for n in (proc.get("networks", []) or [])
+                ]
+                self._build_table_window(tab, ["Network", "Wildcard", "Area"], net_rows)
+        else:
+            net_rows = [
+                (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
+                for n in (ospf.get("networks", []) or [])
+            ]
+            self._build_table_window(networks_frame, ["Network", "Wildcard", "Area"], net_rows)
 
         # Vecinos OSPF (si están disponibles)
         peers = []
@@ -199,26 +218,49 @@ class OspfModulePanel(tk.Frame):
 
         ospf = (self.shared_data.get("routing_protocols", {}).get("ospf", {}) or {})
         enabled = bool(ospf.get("enabled"))
+        processes = list(ospf.get("processes") or [])
         process_id = ospf.get("process_id", "")
         router_id = ospf.get("router_id", "")
 
         ttk.Label(summary_frame, text=f"Estado: {'Habilitado' if enabled else 'Deshabilitado'}", background="white").pack(side=tk.LEFT)
-        ttk.Label(summary_frame, text=f"  |  Proceso: {process_id or 'N/A'}", background="white").pack(side=tk.LEFT)
-        ttk.Label(summary_frame, text=f"  |  Router-ID: {router_id or 'N/A'}", background="white").pack(side=tk.LEFT)
+        if processes:
+            pid_list = ", ".join([str(p.get("process_id", "")) or "?" for p in processes])
+            ttk.Label(summary_frame, text=f"  |  Procesos: {pid_list}", background="white").pack(side=tk.LEFT)
+        else:
+            ttk.Label(summary_frame, text=f"  |  Proceso: {process_id or 'N/A'}", background="white").pack(side=tk.LEFT)
+        ttk.Label(summary_frame, text=f"  |  Router-ID: {router_id or (', '.join([p.get('router_id','') for p in processes if p.get('router_id')]) or 'N/A')}", background="white").pack(side=tk.LEFT)
 
         networks_frame = ttk.Frame(container, style="Card.TFrame", padding=(10, 10))
-        networks_frame.pack(fill=tk.X, expand=False, pady=(6, 8))
+        networks_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 8))
         ttk.Label(networks_frame, text="Redes Anunciadas (network / wildcard / area)", font=("Arial", 11, "bold"), background="white").pack(anchor="w", pady=(0, 6))
 
-        net_rows = [
-            (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
-            for n in (ospf.get("networks", []) or [])
-        ]
-        self._build_table(
-            networks_frame,
-            headers=["Network", "Wildcard", "Area"],
-            rows=net_rows,
-        )
+        if processes:
+            nb = ttk.Notebook(networks_frame)
+            nb.pack(fill=tk.BOTH, expand=True)
+            for idx, proc in enumerate(processes):
+                tab = ttk.Frame(nb)
+                nb.add(tab, text=f"P{proc.get('process_id') or idx+1}")
+                rid_lbl = ttk.Label(tab, text=f"Router-ID: {proc.get('router_id', '') or 'N/A'}", background="white")
+                rid_lbl.pack(anchor="w", pady=(0,6))
+                net_rows = [
+                    (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
+                    for n in (proc.get("networks", []) or [])
+                ]
+                self._build_table(
+                    tab,
+                    headers=["Network", "Wildcard", "Area"],
+                    rows=net_rows,
+                )
+        else:
+            net_rows = [
+                (n.get("network", ""), n.get("wildcard", ""), n.get("area", ""))
+                for n in (ospf.get("networks", []) or [])
+            ]
+            self._build_table(
+                networks_frame,
+                headers=["Network", "Wildcard", "Area"],
+                rows=net_rows,
+            )
 
         peers = []
         try:

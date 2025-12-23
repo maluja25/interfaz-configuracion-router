@@ -1,6 +1,15 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
+from modules.router_analyzer.interface_actions import shutdown_interface, no_shutdown_interface
+import threading
+from modules.router_analyzer.connections import run_telnet_command, run_ssh_command, run_serial_command, run_telnet_commands_script
+from modules.router_analyzer.vendor_commands import INTERFACES_BRIEF, INTERFACE_CONFIG_SECTION
+from modules.router_analyzer.parsers import (
+    parse_cisco_ip_interface_brief,
+    parse_huawei_ip_interface_brief,
+    parse_juniper_interfaces_terse,
+)
 
 class InterfaceConfigFrame(tk.Frame):
     def __init__(self, parent, shared_data):
@@ -8,13 +17,15 @@ class InterfaceConfigFrame(tk.Frame):
         self.shared_data = shared_data
         # Configuración responsive: porcentajes por columna de la tabla
         self._column_percentages = {
-            'Interfaz': 0.20,
+            'Interfaz': 0.18,
             'Tipo': 0.15,
-            'IP': 0.22,
-            'Máscara': 0.15,
-            'Estado': 0.10,
-            'Descripción': 0.18
+            'IP': 0.20,
+            'Máscara': 0.14,
+            'Estado': 0.08,
+            'Acción': 0.12,
+            'Descripción': 0.13
         }
+        self._state_buttons = {}
         
         # Inicializar datos de interfaces si no existen
         if 'interfaces' not in self.shared_data or not self.shared_data['interfaces']:
@@ -239,7 +250,7 @@ class InterfaceConfigFrame(tk.Frame):
                   foreground=[('selected', 'white')])
 
         # Crear Treeview
-        columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Descripción')
+        columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Acción', 'Descripción')
         self.interface_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=10)
         
         # Configurar columnas (responsive por porcentaje)
@@ -258,11 +269,17 @@ class InterfaceConfigFrame(tk.Frame):
                     self.interface_tree.column(col, width=w)
             except Exception:
                 pass
-        self.interface_tree.bind('<Configure>', lambda e: _resize_tree_columns(e.width))
+        self.interface_tree.bind('<Configure>', lambda e: (_resize_tree_columns(e.width), self._update_state_buttons_positions()))
         
         # Scrollbar
         tree_scrollbar = ttk.Scrollbar(table_frame, orient='vertical', command=self.interface_tree.yview)
-        self.interface_tree.configure(yscrollcommand=tree_scrollbar.set)
+        def _on_tree_scroll(*args):
+            try:
+                tree_scrollbar.set(*args)
+            except Exception:
+                pass
+            self._update_state_buttons_positions()
+        self.interface_tree.configure(yscrollcommand=_on_tree_scroll)
         
         # Botones de acción
         button_frame = tk.Frame(table_frame, bg='white')
@@ -291,29 +308,51 @@ class InterfaceConfigFrame(tk.Frame):
         
         # Cargar datos
         self.refresh_interface_list()
+        self._rebuild_state_buttons()
+        self._update_state_buttons_positions()
         
     def refresh_interface_list(self):
         """Refrescar la lista de interfaces"""
         # Limpiar tabla
         for item in self.interface_tree.get_children():
             self.interface_tree.delete(item)
+        for _btn in list(self._state_buttons.values()):
+            try:
+                _btn.destroy()
+            except Exception:
+                pass
+        self._state_buttons = {}
             
         # Agregar interfaces
-        for interface in self.shared_data['interfaces']:
+        # Ordenar por estado (UP primero) y nombre
+        sorted_interfaces = sorted(
+            self.shared_data['interfaces'],
+            key=lambda i: (
+                0 if str(i.get('status', 'down')).lower() == 'up' else 1,
+                str(i.get('name', ''))
+            )
+        )
+        for interface in sorted_interfaces:
             status_text = "UP" if interface.get('status', '').lower() == 'up' else "DOWN"
-            self.interface_tree.insert('', tk.END, values=(
+            item_id = self.interface_tree.insert('', tk.END, values=(
                 interface.get('name', 'N/A'),
                 interface.get('type', 'Ethernet'),  # Tipo por defecto
-                interface.get('ip_address', 'N/A'),
+                interface.get('ip_address') or interface.get('ip', 'N/A'),
                 interface.get('mask', 'N/A'),
                 status_text,
+                "",
                 interface.get('description', 'N/A')
             ), tags=(interface.get('status', 'down'),))
+            try:
+                self._create_state_button(item_id, interface.get('name', 'N/A'), interface.get('status', 'down'))
+            except Exception:
+                pass
         
         # Configurar tags para colores
         self.interface_tree.tag_configure('up', background='#d4edda', foreground='#155724')
         self.interface_tree.tag_configure('down', background='#f8d7da', foreground='#721c24')
         self.interface_tree.tag_configure('oddrow', background='#f2f2f2')
+        self._update_state_buttons_positions()
         
     def edit_interface(self):
         """Editar interfaz seleccionada"""
@@ -455,10 +494,13 @@ class InterfaceConfigFrame(tk.Frame):
         
         interface = next((i for i in self.shared_data['interfaces'] if i.get('name') == interface_name), None)
         if interface:
-            new_status = 'down' if interface.get('status', 'down') == 'up' else 'up'
-            interface['status'] = new_status
-            self.refresh_interface_list()
-            messagebox.showinfo("Estado", f"Interfaz {interface_name} {'activada' if new_status == 'up' else 'desactivada'}")
+            current_status = interface.get('status', 'down')
+            target_action = 'off' if current_status == 'up' else 'on'
+            if self._confirm_state_change(interface_name, target_action):
+                self._execute_interface_action(interface_name, target_action)
+                self.refresh_interface_list()
+                new_status = 'up' if target_action == 'on' else 'down'
+                messagebox.showinfo("Estado", f"Interfaz {interface_name} {'activada' if new_status == 'up' else 'desactivada'}")
             
     def create_command_preview(self, parent):
         """Crear vista previa de comandos"""
@@ -516,3 +558,230 @@ class InterfaceConfigFrame(tk.Frame):
     def refresh(self):
         """Refrescar la vista"""
         self.refresh_interface_list()
+        self._rebuild_state_buttons()
+        self._update_state_buttons_positions()
+
+    def _create_state_button(self, item_id: str, interface_name: str, status: str):
+        txt = "OFF" if str(status).lower() == "up" else "ON"
+        bg = "#dc3545" if txt == "OFF" else "#28a745"
+        btn = tk.Button(self.interface_tree, text=txt, bg=bg, fg="white", font=("Arial", 9, "bold"), relief="solid", bd=1, cursor="hand2",
+                        command=lambda: self._on_state_button_clicked(interface_name, status))
+        self._state_buttons[item_id] = btn
+        return btn
+
+    def _on_state_button_clicked(self, interface_name: str, status: str):
+        action = 'off' if str(status).lower() == 'up' else 'on'
+        if not self._confirm_state_change(interface_name, action):
+            return
+        target_item = None
+        for item_id in self.interface_tree.get_children():
+            item = self.interface_tree.item(item_id)
+            vals = item.get('values', [])
+            if vals and vals[0] == interface_name:
+                target_item = item_id
+                break
+        if target_item:
+            btn = self._state_buttons.get(target_item)
+            if btn and btn.winfo_exists():
+                try:
+                    btn.config(state="disabled")
+                except Exception:
+                    pass
+        def _worker():
+            try:
+                self._execute_interface_action(interface_name, action)
+                self._refresh_interfaces_only()
+            finally:
+                def _ui_update():
+                    self.refresh_interface_list()
+                    self._rebuild_state_buttons()
+                    self._update_state_buttons_positions()
+                try:
+                    self.after(0, _ui_update)
+                except Exception:
+                    _ui_update()
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _rebuild_state_buttons(self):
+        for item_id in self.interface_tree.get_children():
+            item = self.interface_tree.item(item_id)
+            vals = item.get('values', [])
+            if len(vals) >= 6:
+                name = vals[0]
+                estado = str(vals[4]).strip().upper()
+                status = 'up' if estado == 'UP' else 'down'
+                btn = self._state_buttons.get(item_id)
+                if not btn or not btn.winfo_exists():
+                    self._create_state_button(item_id, name, status)
+                else:
+                    txt = "OFF" if status == "up" else "ON"
+                    bg = "#dc3545" if txt == "OFF" else "#28a745"
+                    btn.config(text=txt, bg=bg, command=lambda n=name, s=status: self._on_state_button_clicked(n, s))
+
+    def _update_state_buttons_positions(self):
+        if not self._columns or 'Acción' not in self._columns:
+            return
+        col_index = self._columns.index('Acción')
+        for item_id, btn in list(self._state_buttons.items()):
+            try:
+                bbox = self.interface_tree.bbox(item_id, column=col_index)
+            except Exception:
+                bbox = None
+            if not bbox:
+                try:
+                    btn.place_forget()
+                except Exception:
+                    pass
+                continue
+            x, y, w, h = bbox
+            bw = 56
+            bh = max(20, h - 6) if h else 22
+            bx = x + (w - bw) // 2
+            by = y + (h - bh) // 2 if h else y
+            try:
+                btn.place(x=bx, y=by, width=bw, height=bh)
+            except Exception:
+                pass
+
+    def _update_row_after_toggle(self, interface_name: str, new_status: str):
+        target_item = None
+        for item_id in self.interface_tree.get_children():
+            item = self.interface_tree.item(item_id)
+            vals = item.get('values', [])
+            if vals and vals[0] == interface_name:
+                target_item = item_id
+                break
+        if not target_item:
+            return
+        item = self.interface_tree.item(target_item)
+        vals = list(item.get('values', []))
+        if len(vals) >= 6:
+            vals[4] = "UP" if new_status == 'up' else "DOWN"
+            self.interface_tree.item(target_item, values=vals, tags=(new_status,))
+            btn = self._state_buttons.get(target_item)
+            if btn and btn.winfo_exists():
+                txt = "OFF" if new_status == 'up' else "ON"
+                bg = "#dc3545" if txt == "OFF" else "#28a745"
+                btn.config(text=txt, bg=bg, command=lambda n=interface_name, s=new_status: self._on_state_button_clicked(n, s))
+        for i in self.shared_data.get('interfaces', []):
+            if i.get('name') == interface_name:
+                i['status'] = new_status
+                break
+
+    def _refresh_interfaces_only(self) -> None:
+        conn = self.shared_data.get('connection_data', {}) or {}
+        vendor = (conn.get('vendor_hint') or conn.get('vendor') or '').lower()
+        cmd = INTERFACES_BRIEF.get(vendor, "")
+        if not cmd:
+            try:
+                proto_probe = (conn.get('protocol') or '').strip()
+                if proto_probe == 'Telnet':
+                    vendor = 'cisco'
+                    cmd = INTERFACES_BRIEF.get(vendor, "")
+                else:
+                    return
+            except Exception:
+                return
+        raw = ""
+        sec_raw = ""
+        try:
+            conn_fast = dict(conn)
+            conn_fast['fast_mode'] = True
+            conn_fast['verbose'] = True
+            conn_fast['vendor_hint'] = vendor or 'cisco'
+            proto = conn_fast.get('protocol', 'SSH2')
+            sec_cmd = INTERFACE_CONFIG_SECTION.get('cisco', '')
+            if proto == 'Telnet':
+                out = run_telnet_commands_script(conn_fast, [cmd] + ([sec_cmd] if sec_cmd else []), vendor='cisco')
+                raw = (out[0] if out else "")
+                sec_raw = (out[1] if sec_cmd and len(out) > 1 else "")
+            elif proto == 'Serial':
+                raw = run_serial_command(conn_fast, cmd)
+                if sec_cmd:
+                    sec_raw = run_serial_command(conn_fast, sec_cmd)
+            else:
+                raw = run_ssh_command(conn_fast, cmd)
+                if sec_cmd:
+                    sec_raw = run_ssh_command(conn_fast, sec_cmd)
+        except Exception:
+            raw = ""
+            sec_raw = ""
+        interfaces = []
+        try:
+            if (vendor == 'cisco') or (proto == 'Telnet'):
+                interfaces = parse_cisco_ip_interface_brief(raw or "")
+                if not interfaces and vendor == 'huawei':
+                    interfaces = parse_huawei_ip_interface_brief(raw or "")
+                if not interfaces and vendor == 'juniper':
+                    interfaces = parse_juniper_interfaces_terse(raw or "")
+            else:
+                if vendor == 'huawei':
+                    interfaces = parse_huawei_ip_interface_brief(raw or "")
+                elif vendor == 'juniper':
+                    interfaces = parse_juniper_interfaces_terse(raw or "")
+        except Exception:
+            interfaces = []
+        try:
+            from modules.router_analyzer.parsers import parse_cisco_interface_section
+            if sec_raw:
+                sec_list = parse_cisco_interface_section(sec_raw or "")
+                mask_map = {i['name']: i for i in sec_list}
+                merged = []
+                for it in interfaces or []:
+                    mi = mask_map.get(it['name'], {})
+                    merged.append({
+                        **it,
+                        "ip_address": it.get("ip_address") or mi.get("ip_address", ""),
+                        "mask": mi.get("mask", it.get("mask", "")),
+                    })
+                interfaces = merged or interfaces
+        except Exception:
+            pass
+        if interfaces:
+            self.shared_data['interfaces'] = interfaces
+
+    def _confirm_state_change(self, interface_name: str, action: str) -> bool:
+        dlg = tk.Toplevel(self)
+        dlg.title("⚠️ Confirmación de cambio de estado")
+        dlg.transient(self)
+        dlg.grab_set()
+        dlg.configure(bg="#ffffff")
+        dlg.geometry("460x200")
+        dlg.update_idletasks()
+        x = (dlg.winfo_screenwidth() // 2) - (460 // 2)
+        y = (dlg.winfo_screenheight() // 2) - (200 // 2)
+        dlg.geometry(f"460x200+{x}+{y}")
+        tk.Label(dlg, text="⚠️ Confirmación de cambio de estado", font=("Arial", 13, "bold"), bg="#ffffff", fg="#333333").pack(anchor="w", padx=20, pady=(16, 6))
+        verbo = "APAGAR" if action == "off" else "ENCENDER"
+        tk.Label(dlg, text=f"¿Estás seguro que deseas {verbo} la interfaz {interface_name}?\nEsta acción puede generar pérdida de conectividad.", font=("Arial", 11), bg="#ffffff", fg="#555555", justify="left").pack(anchor="w", padx=20, pady=(4, 12))
+        btns = tk.Frame(dlg, bg="#ffffff")
+        btns.pack(fill="x", padx=20, pady=(8, 0))
+        result = {"ok": False}
+        def _ok():
+            result["ok"] = True
+            dlg.destroy()
+        def _cancel():
+            result["ok"] = False
+            dlg.destroy()
+        tk.Button(btns, text="✖ Cancelar", bg="#dc3545", fg="white", font=("Arial", 11, "bold"), width=12, command=_cancel, cursor="hand2", relief="solid", bd=1).pack(side="right")
+        tk.Button(btns, text="✔ Confirmar", bg="#28a745", fg="white", font=("Arial", 11, "bold"), width=12, command=_ok, cursor="hand2", relief="solid", bd=1).pack(side="right", padx=(0,10))
+        dlg.wait_window(dlg)
+        return bool(result.get("ok"))
+
+    def _execute_interface_action(self, interface_name: str, action: str) -> None:
+        iface = next((i for i in self.shared_data.get('interfaces', []) if i.get('name') == interface_name), None)
+        if not iface:
+            return
+        conn = self.shared_data.get('connection_data', {}) or {}
+        vendor = (conn.get('vendor_hint') or conn.get('vendor') or '').lower()
+        conn_fast = dict(conn)
+        conn_fast['fast_mode'] = True
+        conn_fast['verbose'] = True
+        conn_fast['send_script'] = True
+        try:
+            if action == 'off':
+                shutdown_interface(conn_fast, vendor, interface_name)
+            else:
+                no_shutdown_interface(conn_fast, vendor, interface_name)
+        except Exception:
+            pass

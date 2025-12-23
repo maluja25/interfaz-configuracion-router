@@ -8,7 +8,7 @@ from .connections import (
     detect_vendor_telnet,
     detect_vendor_serial,
 )
-from .vendor_commands import DISABLE_PAGING, VERSION_COMMAND, INTERFACES_BRIEF, RUNNING_CONFIG
+from .vendor_commands import DISABLE_PAGING, VERSION_COMMAND, INTERFACES_BRIEF, RUNNING_CONFIG, INTERFACE_CONFIG_SECTION
 from .parsers import (
     parse_huawei_version,
     parse_huawei_ip_interface_brief,
@@ -25,6 +25,7 @@ from .parsers import (
     parse_cisco_bgp_summary,
     parse_cisco_ospf_neighbor,
 )
+from .connections import run_telnet_command, run_ssh_command, run_serial_command
 
 
 def run_analysis(connection_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -182,6 +183,26 @@ class RouterAnalyzer:
             if rcfg and rcfg not in cmds:
                 cmds.extend(DISABLE_PAGING.get(ven_key, []))
                 cmds.append(rcfg)
+        try:
+            if ven_key == "cisco":
+                sec_cmd = INTERFACE_CONFIG_SECTION.get("cisco", "")
+                if sec_cmd:
+                    conn_fast = dict(self.connection_data)
+                    conn_fast["fast_mode"] = True
+                    conn_fast["vendor_hint"] = "cisco"
+                    conn_fast["verbose"] = bool(self.connection_data.get("verbose"))
+                    if self.protocol == "Telnet":
+                        sec_raw = run_telnet_command(conn_fast, sec_cmd, vendor="cisco")
+                    elif self.protocol == "Serial":
+                        sec_raw = run_serial_command(conn_fast, sec_cmd)
+                    else:
+                        sec_raw = run_ssh_command(conn_fast, sec_cmd)
+                    if sec_raw and sec_raw.strip():
+                        result.setdefault("raw", {})["interface_config_section"] = sec_raw
+                        if sec_cmd not in cmds:
+                            cmds.append(sec_cmd)
+        except Exception:
+            pass
         self.last_check_details = cmds
 
         # Mapear datos crudos por vendor para compatibilidad con parse_analysis_data
@@ -191,6 +212,8 @@ class RouterAnalyzer:
         raw_static = result.get("raw", {}).get("static_routes", "")
         raw_ospf_peers = result.get("raw", {}).get("ospf_peers", "")
         raw_bgp_summary = result.get("raw", {}).get("bgp_summary", "")
+        raw_ospf_cfg = result.get("raw", {}).get("ospf_config_section", "")
+        raw_bgp_cfg = result.get("raw", {}).get("bgp_config_section", "")
         data: Dict[str, Any] = {}
         if ven_key == "huawei":
             data["huawei_version"] = raw_version
@@ -202,6 +225,10 @@ class RouterAnalyzer:
                 data["huawei_ospf_peer"] = raw_ospf_peers
             if raw_bgp_summary:
                 data["huawei_bgp_peer"] = raw_bgp_summary
+            if raw_ospf_cfg:
+                data["huawei_ospf_config"] = raw_ospf_cfg
+            if raw_bgp_cfg:
+                data["huawei_bgp_config"] = raw_bgp_cfg
         elif ven_key == "cisco":
             data["cisco_show_version"] = raw_version
             data["cisco_ip_int_brief"] = raw_ifaces
@@ -212,6 +239,10 @@ class RouterAnalyzer:
                 data["cisco_ospf_peer"] = raw_ospf_peers
             if raw_bgp_summary:
                 data["cisco_bgp_summary"] = raw_bgp_summary
+            if raw_ospf_cfg:
+                data["cisco_ospf_config"] = raw_ospf_cfg
+            if raw_bgp_cfg:
+                data["cisco_bgp_config"] = raw_bgp_cfg
         elif ven_key == "juniper":
             data["juniper_show_version"] = raw_version
             data["juniper_interfaces_terse"] = raw_ifaces
@@ -277,7 +308,11 @@ class RouterAnalyzer:
                 if ospf_cfg:
                     parsed_ospf = parse_huawei_ospf_config(ospf_cfg)
                     routing_protocols["ospf"].update(parsed_ospf)
-                    has_valid_ospf = bool(parsed_ospf.get("process_id")) or bool(parsed_ospf.get("networks"))
+                    has_valid_ospf = (
+                        bool(parsed_ospf.get("process_id"))
+                        or bool(parsed_ospf.get("networks"))
+                        or bool(parsed_ospf.get("processes"))
+                    )
                     routing_protocols["ospf"]["config"] = ospf_cfg if has_valid_ospf else ""
                     routing_protocols["ospf"]["enabled"] = has_valid_ospf
                 bgp_cfg = data.get("huawei_bgp_config", "") or running_cfg
@@ -309,17 +344,45 @@ class RouterAnalyzer:
                 if c_text:
                     interfaces = parse_cisco_ip_interface_brief(c_text)
                 running_cfg = data.get("cisco_running_config", "")
+                try:
+                    from .parsers import parse_cisco_interface_section
+                    sec_text = data.get("cisco_interface_config_section", "") or analysis_data.get("raw", {}).get("interface_config_section", "") or running_cfg
+                    if sec_text:
+                        sec_list = parse_cisco_interface_section(sec_text)
+                        mask_map = {i.get("name"): i for i in sec_list}
+                        merged: List[Dict[str, Any]] = []
+                        for it in interfaces or []:
+                            mi = mask_map.get(it.get("name"))
+                            if mi:
+                                merged.append({
+                                    **it,
+                                    "ip_address": it.get("ip_address") or mi.get("ip_address", ""),
+                                    "mask": mi.get("mask", it.get("mask", "")),
+                                })
+                            else:
+                                merged.append(it)
+                        interfaces = merged or interfaces
+                except Exception:
+                    pass
                 # OSPF/BGP Cisco: parsear desde running-config
                 if running_cfg:
                     parsed_ospf = parse_cisco_ospf_config(running_cfg)
                     routing_protocols["ospf"].update(parsed_ospf)
-                    has_valid_ospf = bool(parsed_ospf.get("process_id")) or bool(parsed_ospf.get("networks"))
-                    routing_protocols["ospf"]["config"] = running_cfg if has_valid_ospf else ""
+                    has_valid_ospf = (
+                        bool(parsed_ospf.get("process_id"))
+                        or bool(parsed_ospf.get("networks"))
+                        or bool(parsed_ospf.get("processes"))
+                    )
+                    # Usar sección OSPF si está disponible
+                    ospf_cfg = data.get("cisco_ospf_config", "") or running_cfg
+                    routing_protocols["ospf"]["config"] = ospf_cfg if has_valid_ospf else ""
                     routing_protocols["ospf"]["enabled"] = has_valid_ospf
-                    parsed_bgp = parse_cisco_bgp_config(running_cfg)
+                    # Usar sección BGP si está disponible
+                    bgp_cfg = data.get("cisco_bgp_config", "") or running_cfg
+                    parsed_bgp = parse_cisco_bgp_config(bgp_cfg)
                     routing_protocols["bgp"].update(parsed_bgp)
                     has_valid_bgp = bool(parsed_bgp.get("as_number")) or bool(parsed_bgp.get("neighbors"))
-                    routing_protocols["bgp"]["config"] = running_cfg if has_valid_bgp else ""
+                    routing_protocols["bgp"]["config"] = bgp_cfg if has_valid_bgp else ""
                     routing_protocols["bgp"]["enabled"] = has_valid_bgp
                 # Rutas estáticas Cisco (desde salida filtrada)
                 from .parsers import parse_cisco_static_routes
