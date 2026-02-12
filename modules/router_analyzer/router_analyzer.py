@@ -358,6 +358,7 @@ class RouterAnalyzer:
                                     **it,
                                     "ip_address": it.get("ip_address") or mi.get("ip_address", ""),
                                     "mask": mi.get("mask", it.get("mask", "")),
+                                    "vrf": mi.get("vrf", it.get("vrf", "")),
                                 })
                             else:
                                 merged.append(it)

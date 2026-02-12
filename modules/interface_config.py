@@ -3,7 +3,7 @@ from tkinter import ttk, messagebox
 from datetime import datetime
 from modules.router_analyzer.interface_actions import shutdown_interface, no_shutdown_interface
 import threading
-from modules.router_analyzer.connections import run_telnet_command, run_ssh_command, run_serial_command, run_telnet_commands_script
+from modules.router_analyzer.connections import run_telnet_command, run_ssh_command, run_serial_command, run_telnet_commands_batch
 from modules.router_analyzer.vendor_commands import INTERFACES_BRIEF, INTERFACE_CONFIG_SECTION
 from modules.router_analyzer.parsers import (
     parse_cisco_ip_interface_brief,
@@ -18,11 +18,11 @@ class InterfaceConfigFrame(tk.Frame):
         # Configuración responsive: porcentajes por columna de la tabla
         self._column_percentages = {
             'Interfaz': 0.18,
-            'Tipo': 0.15,
-            'IP': 0.20,
-            'Máscara': 0.14,
+            'IP': 0.18,
+            'Máscara': 0.13,
+            'VRF': 0.12,
             'Estado': 0.08,
-            'Acción': 0.12,
+            'Acción': 0.11,
             'Descripción': 0.13
         }
         self._state_buttons = {}
@@ -250,7 +250,7 @@ class InterfaceConfigFrame(tk.Frame):
                   foreground=[('selected', 'white')])
 
         # Crear Treeview
-        columns = ('Interfaz', 'Tipo', 'IP', 'Máscara', 'Estado', 'Acción', 'Descripción')
+        columns = ('Interfaz', 'IP', 'Máscara', 'VRF', 'Estado', 'Acción', 'Descripción')
         self.interface_tree = ttk.Treeview(table_frame, columns=columns, show='headings', height=10)
         
         # Configurar columnas (responsive por porcentaje)
@@ -336,9 +336,9 @@ class InterfaceConfigFrame(tk.Frame):
             status_text = "UP" if interface.get('status', '').lower() == 'up' else "DOWN"
             item_id = self.interface_tree.insert('', tk.END, values=(
                 interface.get('name', 'N/A'),
-                interface.get('type', 'Ethernet'),  # Tipo por defecto
                 interface.get('ip_address') or interface.get('ip', 'N/A'),
                 interface.get('mask', 'N/A'),
+                interface.get('vrf', ''),
                 status_text,
                 "",
                 interface.get('description', 'N/A')
@@ -455,24 +455,121 @@ class InterfaceConfigFrame(tk.Frame):
         
         tk.Label(info_frame, text=f"Nombre: {interface.get('name', 'N/A')}", font=("Arial", 10),
                 bg='#ffffff', fg='#666666').pack(anchor=tk.W, padx=10, pady=5)
-        tk.Label(info_frame, text=f"Tipo: {interface.get('type', 'Ethernet')}", font=("Arial", 10),
-                bg='#ffffff', fg='#666666').pack(anchor=tk.W, padx=10, pady=5)
+        # Se elimina el campo de 'Tipo' en la configuración de interfaz
         
         # Botones
         button_frame = tk.Frame(dialog, bg='#ffffff')
         button_frame.pack(fill=tk.X, padx=20, pady=(0, 20))
         
         def save_changes():
-            interface['ip_address'] = ip_var.get()
-            interface['mask'] = mask_var.get()
-            interface['description'] = desc_var.get()
-            interface['status'] = status_var.get()
-            interface['duplex'] = duplex_var.get()
-            interface['speed'] = speed_var.get()
-            
-            self.refresh_interface_list()
-            messagebox.showinfo("Éxito", f"Interfaz {interface.get('name', 'N/A')} configurada correctamente")
-            dialog.destroy()
+            name = interface.get('name', 'N/A')
+            ip_val = ip_var.get().strip()
+            mask_val = mask_var.get().strip()
+            status_val = status_var.get().strip().lower() or 'up'
+            try:
+                conn = self.shared_data.get('connection_data', {}) or {}
+                vendor = (conn.get('vendor_hint') or conn.get('vendor') or 'cisco').lower()
+                conn_fast = dict(conn)
+                conn_fast['fast_mode'] = True
+                conn_fast['send_script'] = True
+                conn_fast['verbose'] = True
+                cmds_preview = []
+                resp = []
+                if vendor == 'cisco':
+                    status_cmd = "shutdown" if status_val == "down" else "no shutdown"
+                    cmds_preview = [
+                        "configure terminal",
+                        f"interface {name}",
+                        f"ip address {ip_val} {mask_val}",
+                        status_cmd,
+                        "end",
+                        "write memory",
+                    ]
+                    from modules.router_analyzer.interface_actions import set_interface_ip
+                    resp = set_interface_ip(conn_fast, vendor, name, ip_val, mask_val, status_val)  # type: ignore
+                elif vendor == 'huawei':
+                    status_cmd = "shutdown" if status_val == "down" else "undo shutdown"
+                    cmds_preview = [
+                        f"interface {name}",
+                        f"ip address {ip_val} {mask_val}",
+                        status_cmd,
+                        "quit",
+                    ]
+                    from modules.router_analyzer.interface_actions import set_interface_ip
+                    resp = set_interface_ip(conn_fast, vendor, name, ip_val, mask_val, status_val)  # type: ignore
+                elif vendor == 'juniper':
+                    status_cmd = f"set interfaces {name} disable" if status_val == "down" else ""
+                    cmds_preview = [
+                        "configure",
+                        f"set interfaces {name} unit 0 family inet address {ip_val}/{mask_val}",
+                    ]
+                    if status_cmd:
+                        cmds_preview.append(status_cmd)
+                    cmds_preview.extend(["commit", "exit"])
+                    from modules.router_analyzer.interface_actions import set_interface_ip
+                    resp = set_interface_ip(conn_fast, vendor, name, ip_val, mask_val, status_val)  # type: ignore
+                try:
+                    out_text = "\n".join(resp or [])
+                    lines = [ln for ln in out_text.splitlines() if ln.strip()]
+                    errors = []
+                    ospf_alerts = []
+                    for ln in lines:
+                        l = ln.lower()
+                        if ("bad mask" in l) or ("invalid input detected" in l) or ("conflicts with" in l) or ("overlaps" in l):
+                            errors.append(ln)
+                        if ("%ospf-" in l) or (("ospf" in l) and (("adj" in l) or ("neighbor" in l))):
+                            ospf_alerts.append(ln)
+                    if errors:
+                        messagebox.showerror("Error de configuración", "\n".join(errors))
+                        return
+                    if ospf_alerts:
+                        try:
+                            messagebox.showwarning("Aviso OSPF", "\n".join(ospf_alerts))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    self._refresh_interfaces_only()
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self, "terminal_text") and self.terminal_text.winfo_exists():
+                        hostn = "CISCO" if vendor == "cisco" else "ROUTER"
+                        conv_lines = []
+                        if vendor == "cisco":
+                            conv_lines = [
+                                f"{hostn}#configure terminal",
+                                "Enter configuration commands, one per line.  End with CNTL/Z.",
+                                f"{hostn}(config)#",
+                                f"{hostn}(config)#interface {name}",
+                                f"{hostn}(config-if)#",
+                                f"{hostn}(config-if)#ip address {ip_val} {mask_val}",
+                                f"{hostn}(config-if)#" + status_cmd,
+                                f"{hostn}(config-if)#end",
+                                f"{hostn}#",
+                                f"{hostn}#write memory",
+                            ]
+                        else:
+                            conv_lines = cmds_preview
+                        self.terminal_text.config(state=tk.NORMAL)
+                        self.terminal_text.delete("1.0", tk.END)
+                        self.terminal_text.insert(tk.END, "\n".join(conv_lines))
+                        self.terminal_text.config(state=tk.DISABLED)
+                except Exception:
+                    pass
+                interface['ip_address'] = ip_val
+                interface['mask'] = mask_val
+                interface['description'] = desc_var.get()
+                interface['status'] = status_val
+                interface['duplex'] = duplex_var.get()
+                interface['speed'] = speed_var.get()
+                self.refresh_interface_list()
+                messagebox.showinfo("Éxito", f"Interfaz {name} configurada correctamente")
+                dialog.destroy()
+            except Exception:
+                self.refresh_interface_list()
+                dialog.destroy()
         
         cancel_btn = tk.Button(button_frame, text="Cancelar", command=dialog.destroy,
                               bg='#6c757d', fg='white', font=("Arial", 12), width=10)
@@ -530,6 +627,7 @@ class InterfaceConfigFrame(tk.Frame):
         terminal_text = tk.Text(terminal_frame, bg='black', fg='#00ff00',
                                 font=("Consolas", 10), height=15, wrap=tk.WORD)
         terminal_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.terminal_text = terminal_text
         # Permitir desplazamiento con la rueda SOLO dentro de la terminal
         try:
             def _on_terminal_mousewheel(event):
@@ -539,20 +637,6 @@ class InterfaceConfigFrame(tk.Frame):
             terminal_text.bind("<MouseWheel>", _on_terminal_mousewheel)
         except Exception:
             pass
-        
-        # Generar comandos
-        commands = ["# Configuración de interfaces activas"]
-        for interface in self.shared_data['interfaces']:
-            if interface.get('ip_address') and interface.get('status') == 'up':
-                commands.extend([
-                    f"interface {interface.get('name', 'N/A')}",
-                    f"  ip address {interface.get('ip_address', '')} {interface.get('mask', '')}",
-                    f"  description {interface.get('description', '')}",
-                    "  no shutdown",
-                    "  exit"
-                ])
-        
-        terminal_text.insert(tk.END, "\n".join(commands))
         terminal_text.config(state=tk.DISABLED)
         
     def refresh(self):
@@ -596,6 +680,32 @@ class InterfaceConfigFrame(tk.Frame):
                     self.refresh_interface_list()
                     self._rebuild_state_buttons()
                     self._update_state_buttons_positions()
+                    try:
+                        conn = self.shared_data.get('connection_data', {}) or {}
+                        vendor = (conn.get('vendor_hint') or conn.get('vendor') or 'cisco').lower()
+                        if hasattr(self, "terminal_text") and self.terminal_text.winfo_exists():
+                            hostn = "CISCO" if vendor == "cisco" else "ROUTER"
+                            if vendor == "cisco":
+                                s_cmd = "shutdown" if action == "off" else "no shutdown"
+                                lines = [
+                                    f"{hostn}#configure terminal",
+                                    "Enter configuration commands, one per line.  End with CNTL/Z.",
+                                    f"{hostn}(config)#",
+                                    f"{hostn}(config)#interface {interface_name}",
+                                    f"{hostn}(config-if)#",
+                                    f"{hostn}(config-if)#" + s_cmd,
+                                    f"{hostn}(config-if)#end",
+                                    f"{hostn}#",
+                                    f"{hostn}#write memory",
+                                ]
+                            else:
+                                lines = [action]
+                            self.terminal_text.config(state=tk.NORMAL)
+                            self.terminal_text.delete("1.0", tk.END)
+                            self.terminal_text.insert(tk.END, "\n".join(lines))
+                            self.terminal_text.config(state=tk.DISABLED)
+                    except Exception:
+                        pass
                 try:
                     self.after(0, _ui_update)
                 except Exception:
@@ -606,7 +716,7 @@ class InterfaceConfigFrame(tk.Frame):
         for item_id in self.interface_tree.get_children():
             item = self.interface_tree.item(item_id)
             vals = item.get('values', [])
-            if len(vals) >= 6:
+            if len(vals) >= 7:
                 name = vals[0]
                 estado = str(vals[4]).strip().upper()
                 status = 'up' if estado == 'UP' else 'down'
@@ -655,7 +765,7 @@ class InterfaceConfigFrame(tk.Frame):
             return
         item = self.interface_tree.item(target_item)
         vals = list(item.get('values', []))
-        if len(vals) >= 6:
+        if len(vals) >= 7:
             vals[4] = "UP" if new_status == 'up' else "DOWN"
             self.interface_tree.item(target_item, values=vals, tags=(new_status,))
             btn = self._state_buttons.get(target_item)
@@ -692,7 +802,7 @@ class InterfaceConfigFrame(tk.Frame):
             proto = conn_fast.get('protocol', 'SSH2')
             sec_cmd = INTERFACE_CONFIG_SECTION.get('cisco', '')
             if proto == 'Telnet':
-                out = run_telnet_commands_script(conn_fast, [cmd] + ([sec_cmd] if sec_cmd else []), vendor='cisco')
+                out = run_telnet_commands_batch(conn_fast, [cmd] + ([sec_cmd] if sec_cmd else []), vendor='cisco')
                 raw = (out[0] if out else "")
                 sec_raw = (out[1] if sec_cmd and len(out) > 1 else "")
             elif proto == 'Serial':
@@ -733,6 +843,7 @@ class InterfaceConfigFrame(tk.Frame):
                         **it,
                         "ip_address": it.get("ip_address") or mi.get("ip_address", ""),
                         "mask": mi.get("mask", it.get("mask", "")),
+                        "vrf": mi.get("vrf", it.get("vrf", "")),
                     })
                 interfaces = merged or interfaces
         except Exception:

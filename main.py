@@ -62,6 +62,7 @@ class RouterManagerApp:
         self.connection_data = connection_data or {}
         self.router_status = "Conectado" if connection_data else "Desconectado"
         self.router_ip = connection_data.get('hostname', '192.168.1.1') if connection_data else "No configurado"
+        self.restart_requested = False
         
         # Diccionarios para almacenar referencias a widgets
         self.nav_buttons: Dict[str, tk.Button] = {}
@@ -270,6 +271,24 @@ class RouterManagerApp:
             
         # Actualizar botón activo inicial
         self.update_active_button("dashboard")
+
+        disconnect_frame = tk.Frame(sidebar_frame, bg=COLOR_SIDEBAR_BG)
+        disconnect_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=12)
+
+        disconnect_button = tk.Button(
+            disconnect_frame,
+            text="⏻ Desconectar",
+            command=self.request_disconnect,
+            bg="#dc3545",
+            fg=COLOR_WHITE,
+            font=("Arial", 10, "bold"),
+            relief=tk.FLAT,
+            anchor=tk.W,
+            padx=15,
+            pady=10,
+            cursor="hand2"
+        )
+        disconnect_button.pack(fill=tk.X)
         
     def create_content_area(self, parent: tk.Frame) -> None:
         """Crea el área de contenido principal de la aplicación.
@@ -518,6 +537,13 @@ class RouterManagerApp:
         if messagebox.askokcancel(EXIT_TITLE, EXIT_MESSAGE):
             self.root.destroy()
 
+    def request_disconnect(self) -> None:
+        TITLE = "Desconectar"
+        MESSAGE = "¿Deseas desconectarte y volver a la pantalla inicial?"
+        if messagebox.askokcancel(TITLE, MESSAGE):
+            self.restart_requested = True
+            self.root.destroy()
+
     def on_connection_success(self, parsed_data: Dict[str, Any]):
         """Maneja el éxito de la conexión y actualiza la UI."""
         self.shared_data['parsed_data'] = parsed_data
@@ -615,55 +641,48 @@ def main() -> None:
         print("[CLI] Análisis completado.")
         return
 
-    # Modo GUI (por defecto)
-    auth_dialog = AuthDialog(verbose=args.verbose)
-    connection_data = auth_dialog.show()
+    while True:
+        auth_dialog = AuthDialog(verbose=args.verbose)
+        connection_data = auth_dialog.show()
 
-    # Si se canceló la conexión, salir
-    if connection_data is None:
-        print("Conexión cancelada por el usuario")
-        return
+        if connection_data is None:
+            print("Conexión cancelada por el usuario")
+            return
 
-    # Propagar --verbose también en modo GUI para habilitar logs en consola
-    try:
-        if args.verbose:
-            connection_data["verbose"] = True
-    except Exception:
-        pass
-
-    # Iniciar aplicación principal
-    app = RouterManagerApp(connection_data)
-
-    # Reutilizar el análisis ya realizado en el diálogo de autenticación.
-    # Evita ejecutar un segundo análisis.
-    try:
-        target = connection_data.get('hostname') or connection_data.get('port')
-        messagebox.showinfo("Conexión exitosa", f"Conectado a {target} via {connection_data.get('protocol')}")
-    except:
-        pass
-
-    # Si el análisis ya está disponible, actualizar la UI con esos datos.
-    if 'parsed_data' in connection_data:
-        app.on_connection_success(connection_data['parsed_data'])
-    else:
-        # Fallback: solo si por alguna razón no se obtuvo análisis, ejecutar uno.
         try:
-            from modules.router_analyzer import RouterAnalyzer
-            analyzer = RouterAnalyzer(connection_data)
-            if analyzer.connect():
-                analysis_data = analyzer.analyze_router()
-                parsed_data = analyzer.parse_analysis_data(analysis_data)
-                # Guardar en connection_data por consistencia
-                connection_data['analysis_data'] = analysis_data
-                connection_data['parsed_data'] = parsed_data
-                app.on_connection_success(parsed_data)
-            else:
-                messagebox.showerror("Error de Conexión", "No se pudo conectar al router.")
-        except Exception as e:
-            messagebox.showerror("Error de Análisis", f"No se pudo analizar el router: {e}")
+            if args.verbose:
+                connection_data["verbose"] = True
+        except Exception:
+            pass
 
-    # Iniciar la aplicación
-    app.run()
+        app = RouterManagerApp(connection_data)
+
+        try:
+            target = connection_data.get('hostname') or connection_data.get('port')
+            messagebox.showinfo("Conexión exitosa", f"Conectado a {target} via {connection_data.get('protocol')}")
+        except:
+            pass
+
+        if 'parsed_data' in connection_data:
+            app.on_connection_success(connection_data['parsed_data'])
+        else:
+            try:
+                from modules.router_analyzer import RouterAnalyzer
+                analyzer = RouterAnalyzer(connection_data)
+                if analyzer.connect():
+                    analysis_data = analyzer.analyze_router()
+                    parsed_data = analyzer.parse_analysis_data(analysis_data)
+                    connection_data['analysis_data'] = analysis_data
+                    connection_data['parsed_data'] = parsed_data
+                    app.on_connection_success(parsed_data)
+                else:
+                    messagebox.showerror("Error de Conexión", "No se pudo conectar al router.")
+            except Exception as e:
+                messagebox.showerror("Error de Análisis", f"No se pudo analizar el router: {e}")
+
+        app.run()
+        if not app.restart_requested:
+            break
 
 if __name__ == "__main__":
     try:
@@ -679,5 +698,7 @@ if __name__ == "__main__":
                     pass
         except Exception:
             pass
-        # Código de salida estándar para Ctrl+C
+        # Código de salida estándar para Ctrl+C|
         sys.exit(130)
+
+

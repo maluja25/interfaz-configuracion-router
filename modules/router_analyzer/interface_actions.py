@@ -32,23 +32,25 @@ def _exec(connection_data: Dict[str, Any], commands: List[str], vendor: str = ""
     return outputs
 
 
-def set_interface_ip(connection_data: Dict[str, Any], vendor: str, interface: str, ip: str, mask: str) -> List[str]:
+def set_interface_ip(connection_data: Dict[str, Any], vendor: str, interface: str, ip: str, mask: str, status: str = "up") -> List[str]:
     vendor = (vendor or "").lower()
     if vendor == "cisco":
+        status_cmd = "shutdown" if (status or "").lower() == "down" else "no shutdown"
         cmds = [
             "configure terminal",
             f"interface {interface}",
             f"ip address {ip} {mask}",
-            "no shutdown",
+            status_cmd,
             "end",
             "write memory",
         ]
         return _exec(connection_data, cmds, vendor)
     if vendor == "huawei":
+        status_cmd = "shutdown" if (status or "").lower() == "down" else "undo shutdown"
         cmds = [
             f"interface {interface}",
             f"ip address {ip} {mask}",
-            "undo shutdown",
+            status_cmd,
             "quit",
             "save",
         ]
@@ -57,9 +59,11 @@ def set_interface_ip(connection_data: Dict[str, Any], vendor: str, interface: st
         cmds = [
             f"configure",
             f"set interfaces {interface} unit 0 family inet address {ip}/{mask}",
+            (f"set interfaces {interface} disable" if (status or "").lower() == "down" else ""),
             "commit",
             "exit",
         ]
+        cmds = [c for c in cmds if c]
         return _exec(connection_data, cmds, vendor)
     return []
 

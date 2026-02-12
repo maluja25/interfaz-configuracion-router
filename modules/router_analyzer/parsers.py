@@ -302,11 +302,18 @@ def parse_cisco_ip_interface_brief(text: str) -> List[Dict[str, Any]]:
             "show ip interface brief", "copyright",
         ]):
             continue
+        if not s[0].isalnum():
+            continue
         parts = re.split(r"\s+", s)
         if len(parts) < 3:
             continue
         name = parts[0]
-        ipaddr = parts[1] if parts[1].lower() != "unassigned" else ""
+        iptok = parts[1]
+        import re as _re
+        is_ip = bool(_re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", iptok))
+        if (iptok.lower() != "unassigned") and (not is_ip):
+            continue
+        ipaddr = iptok if is_ip else ""
         status = "down"
         if len(parts) >= 6:
             st = parts[-2].lower()
@@ -330,15 +337,19 @@ def parse_cisco_interface_section(text: str) -> List[Dict[str, Any]]:
         blk = m.group(2) or ""
         ip = ""
         mask = ""
+        vrf = ""
         ni = re.search(r"(?mi)^\s*no\s+ip\s+address\b", blk)
         if not ni:
             mm = re.search(r"(?mi)^\s*ip\s+address\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\b", blk)
             if mm:
                 ip = mm.group(1)
                 mask = mm.group(2)
+        vm = re.search(r"(?mi)^\s*ip\s+vrf\s+forwarding\s+(\S+)\b", blk)
+        if vm:
+            vrf = vm.group(1)
         tmatch = re.match(r"^([A-Za-z-]+)", name)
         itype = tmatch.group(1) if tmatch else "Ethernet"
-        results.append({"name": name, "type": itype, "ip_address": ip, "mask": mask})
+        results.append({"name": name, "type": itype, "ip_address": ip, "mask": mask, "vrf": vrf})
     return results
 
 
